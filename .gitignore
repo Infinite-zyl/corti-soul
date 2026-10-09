@@ -1,0 +1,25 @@
+# ---- 构建产物 / 虚拟环境 ----
+.venv/
+dist/
+build/
+__pycache__/
+*.pyc
+*.pyo
+.wheels/
+
+# ---- 运行期状态（含实例相关的私密数据，绝不入库）----
+upstream-guard-state.json
+*.log
+logs/
+
+# ---- 本地覆盖配置（放密钥、本地路径）----
+launcher.config.json
+.env
+.env.*
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

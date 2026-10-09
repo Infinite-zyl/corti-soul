@@ -1,0 +1,24 @@
+{
+  "app_name": "AI启动器",
+  "title": "AI启动器",
+  "exe_name": "AI启动器",
+  "tagline": "把人格唤起来",
+  "monogram": "AI",
+  "palette": "plum",
+  "colors": {
+    "light": "#B975F9",
+    "base": "#A855F7",
+    "accent": "#EC4899"
+  },
+  "version": "2.0.0",
+  "version_tuple": [
+    2,
+    0,
+    0,
+    0
+  ],
+  "company": "AI启动器",
+  "file_description": "AI启动器 — desktop app",
+  "window_title": "AI启动器 — 把人格唤起来",
+  "html_title": "AI启动器"
+}

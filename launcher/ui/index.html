@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark">
+<title>AI启动器</title>
+<style>
+  :root{
+    --light:#B975F9; --base:#A855F7; --accent:#EC4899;
+    --bg:#0B0E14; --bg2:#0E1219;
+    --panel:rgba(255,255,255,.042); --panel2:rgba(255,255,255,.065);
+    --line:rgba(255,255,255,.085); --line2:rgba(255,255,255,.14);
+    --ink:#EEF2F8; --dim:#B4BECD; --muted:#7E8798;
+    --ok:#34D399; --bad:#F8717A; --warn:#FBBF24;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:
+      radial-gradient(900px 480px at 6% -16%, color-mix(in srgb, var(--base) 24%, transparent), transparent 62%),
+      radial-gradient(820px 460px at 106% -6%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
+      var(--bg);
+    color:var(--ink);
+    font:14px/1.5 "MiSans","Microsoft YaHei UI","Microsoft YaHei","Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    overflow:hidden; user-select:none; cursor:default;
+  }
+  .shell{display:flex;flex-direction:column;height:100vh}
+
+  /* ---------- 标题栏 ---------- */
+  .titlebar{
+    height:46px;flex:none;display:flex;align-items:center;gap:10px;
+    padding:0 11px 0 16px;border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,0));
+  }
+  .orb{
+    width:19px;height:19px;border-radius:7px;flex:none;
+    background:conic-gradient(from 140deg,var(--base),var(--accent),var(--base));
+    box-shadow:0 0 0 1px rgba(255,255,255,.16),0 4px 14px color-mix(in srgb,var(--base) 42%,transparent);
+  }
+  .titlebar b{font-size:13.5px;font-weight:650;letter-spacing:.2px}
+  .titlebar .tag{
+    font-size:11px;color:var(--muted);border:1px solid var(--line);
+    border-radius:99px;padding:1px 9px;margin-left:2px;
+  }
+  .titlebar .grow{flex:1}
+  .wbtn{
+    width:32px;height:26px;border-radius:8px;border:1px solid transparent;
+    background:transparent;color:var(--dim);font:inherit;font-size:14px;line-height:1;
+    cursor:pointer;display:flex;align-items:center;justify-content:center;
+    transition:background .14s,color .14s,border-color .14s;
+  }
+  .wbtn:hover{background:var(--panel2);color:var(--ink);border-color:var(--line)}
+  .wbtn.closed:hover{background:#B3373F;border-color:#B3373F;color:#fff}
+
+  /* ---------- 主体 ---------- */
+  .body{flex:1;display:grid;grid-template-columns:264px 1fr;min-height:0}
+
+  aside{
+    border-right:1px solid var(--line);padding:20px 16px 16px;
+    display:flex;flex-direction:column;gap:16px;min-height:0;
+    background:linear-gradient(180deg,rgba(255,255,255,.03),transparent 70%);
+  }
+  .ringwrap{display:flex;flex-direction:column;align-items:center;gap:12px;padding-top:4px}
+  .ring{position:relative;width:132px;height:132px}
+  .ring svg{transform:rotate(-90deg)}
+  .ring .mid{
+    position:absolute;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:1px;
+  }
+  .ring .mid em{font-style:normal;font-size:29px;font-weight:700;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+  .ring .mid em small{font-size:14px;font-weight:500;color:var(--muted)}
+  .ring .mid s{text-decoration:none;font-size:11px;color:var(--muted);letter-spacing:1.4px}
+  .verdict{font-size:13px;font-weight:600}
+  .verdict sub{display:block;font-size:11.5px;color:var(--muted);font-weight:400;margin-top:2px}
+
+  .tactions{display:flex;flex-direction:column;gap:9px}
+  .btn{
+    border:1px solid var(--line2);border-radius:11px;padding:11px 14px;
+    font:inherit;font-size:13.5px;font-weight:550;color:var(--ink);cursor:pointer;
+    background:var(--panel);transition:filter .16s,transform .1s,border-color .16s,background .16s;
+    display:flex;align-items:center;justify-content:center;gap:8px;
+  }
+  .btn:hover{filter:brightness(1.16);border-color:color-mix(in srgb,var(--base) 46%,transparent)}
+  .btn:active{transform:translateY(1px)}
+  .btn.primary{
+    border-color:transparent;color:#fff;
+    background:linear-gradient(180deg,color-mix(in srgb,var(--base) 92%,transparent),color-mix(in srgb,var(--accent) 78%,transparent));
+    box-shadow:0 10px 26px color-mix(in srgb,var(--base) 30%,transparent);
+  }
+  .btn[disabled]{opacity:.5;cursor:progress;filter:none}
+
+  .spacer{flex:1;min-height:6px}
+  .meta{font-size:11px;color:var(--muted);line-height:1.65;border-top:1px solid var(--line);padding-top:12px}
+  .meta code{
+    color:var(--dim);font-family:"Cascadia Mono",Consolas,monospace;font-size:10.5px;
+    overflow-wrap:break-word;word-break:break-word;
+  }
+  .linkbtn{
+    background:none;border:none;color:var(--muted);font:inherit;font-size:11.5px;
+    cursor:pointer;padding:2px 0;text-align:left;transition:color .14s;
+  }
+  .linkbtn:hover{color:var(--dim)}
+  .linkbtn.danger:hover{color:var(--bad)}
+
+  main{padding:18px 20px;overflow-y:auto;display:flex;flex-direction:column;gap:14px;min-height:0}
+  main::-webkit-scrollbar{width:9px}
+  main::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:9px}
+  main::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.18)}
+
+  .sect{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);font-weight:600}
+
+  /* ---------- 当前模型 ---------- */
+  .provider{
+    border:1px solid var(--line);border-radius:var(--radius);padding:13px 15px;
+    background:linear-gradient(120deg,rgba(255,255,255,.05),rgba(255,255,255,.015));
+    display:flex;align-items:center;gap:14px;
+  }
+  .provider .lead{display:flex;flex-direction:column;gap:2px;min-width:0}
+  .provider .lead span{font-size:11px;color:var(--muted);letter-spacing:.4px}
+  .provider .lead b{
+    font-size:14px;font-weight:600;overflow-wrap:break-word;word-break:break-word;
+  }
+  .provider .grow{flex:1}
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{
+    font-size:11px;color:var(--dim);border:1px solid var(--line);
+    border-radius:99px;padding:2px 9px;white-space:nowrap;
+  }
+  .chip.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
+  .chip.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
+
+  /* ---------- 服务卡 ---------- */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(184px,1fr));gap:10px}
+  .svc{
+    border:1px solid var(--line);border-radius:12px;padding:11px 12px;
+    background:var(--panel);display:flex;align-items:center;gap:10px;
+    transition:border-color .2s,background .2s,transform .12s;
+  }
+  .svc:hover{background:var(--panel2);transform:translateY(-1px)}
+  .svc .dot{
+    width:9px;height:9px;border-radius:50%;flex:none;background:var(--bad);
+    box-shadow:0 0 9px color-mix(in srgb,var(--bad) 65%,transparent);
+  }
+  .svc.up .dot{background:var(--ok);box-shadow:0 0 9px color-mix(in srgb,var(--ok) 65%,transparent)}
+  .svc.up{border-color:color-mix(in srgb,var(--ok) 26%,transparent)}
+  .svc .txt{min-width:0;flex:1}
+  .svc .txt b{display:block;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .svc .txt i{font-style:normal;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+  .svc .st{font-size:11px;color:var(--bad);font-weight:600;flex:none}
+  .svc.up .st{color:var(--ok)}
+
+  /* ---------- 标签页 ---------- */
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:-2px}
+  .tabs button{
+    background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
+    font:inherit;font-size:13px;font-weight:550;padding:7px 13px;cursor:pointer;
+    transition:color .15s,border-color .15s;
+  }
+  .tabs button:hover{color:var(--dim)}
+  .tabs button.on{color:var(--ink);border-bottom-color:var(--base)}
+  .tabs .grow{flex:1}
+  .tabs .when{font-size:11px;color:var(--muted);align-self:center;font-variant-numeric:tabular-nums}
+
+  .stream{
+    border:1px solid var(--line);border-radius:12px;background:rgba(0,0,0,.22);
+    padding:6px 4px;max-height:210px;overflow-y:auto;
+    font-family:"Cascadia Mono",Consolas,monospace;font-size:11.5px;line-height:1.75;
+    user-select:text;cursor:text;
+  }
+  .stream::-webkit-scrollbar{width:8px}
+  .stream::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:8px}
+  .row{display:flex;gap:9px;padding:1px 10px;border-radius:6px}
+  .row:hover{background:rgba(255,255,255,.035)}
+  .row .t{color:var(--muted);flex:none}
+  .row .lv{flex:none;width:38px;text-align:center;border-radius:4px;font-size:10px;color:var(--dim);background:rgba(255,255,255,.06)}
+  .row.warn .lv{color:var(--warn);background:color-mix(in srgb,var(--warn) 16%,transparent)}
+  .row.error .lv{color:var(--bad);background:color-mix(in srgb,var(--bad) 16%,transparent)}
+  .row .m{color:var(--dim);min-width:0;overflow-wrap:break-word;word-break:break-word;white-space:pre-wrap}
+  .empty{color:var(--muted);padding:14px 12px;font-size:12px;font-family:inherit}
+
+  .hint{font-size:11px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <div class="titlebar">
+    <div class="orb"></div>
+    <b>AI 人格启动器</b>
+    <span class="tag" id="ver">v2.0.0</span>
+    <span class="grow drag"></span>
+    <button class="wbtn" id="b-min" title="最小化">–</button>
+    <button class="wbtn" id="b-hide" title="收进托盘（后台继续运行）">⤓</button>
+    <button class="wbtn closed" id="b-quit" title="退出启动器">✕</button>
+  </div>
+
+  <div class="body">
+    <aside>
+      <div class="ringwrap">
+        <div class="ring">
+          <svg width="132" height="132" viewBox="0 0 132 132">
+            <circle cx="66" cy="66" r="56" fill="none" stroke="rgba(255,255,255,.075)" stroke-width="9"/>
+            <circle id="arc" cx="66" cy="66" r="56" fill="none" stroke="var(--base)" stroke-width="9"
+                    stroke-linecap="round" stroke-dasharray="351.9" stroke-dashoffset="351.9"
+                    style="transition:stroke-dashoffset .5s ease,stroke .4s"/>
+          </svg>
+          <div class="mid">
+            <em id="cnt">–<small id="tot"></small></em>
+            <s>在线</s>
+          </div>
+        </div>
+        <div class="verdict" id="verdict">正在检查 …<sub>读取端口与进程</sub></div>
+      </div>
+
+      <div class="tactions">
+        <button class="btn primary" id="b-start">启动全部</button>
+        <button class="btn" id="b-refresh">刷新状态</button>
+      </div>
+
+      <div class="spacer"></div>
+
+      <div class="meta">
+        <div id="meta-run">—</div>
+        <code id="meta-base"></code>
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:2px">
+          <button class="linkbtn" id="b-console">打开 Cortico 控制台 ↗</button>
+          <button class="linkbtn" id="b-snow">打开 SnowLuma WebUI ↗</button>
+          <button class="linkbtn danger" id="b-exit">退出启动器</button>
+        </div>
+      </div>
+    </aside>
+
+    <main>
+      <div class="provider">
+        <div class="lead">
+          <span>当前模型</span>
+          <b id="p-active">—</b>
+        </div>
+        <div class="grow"></div>
+        <div class="chips" id="p-chips"></div>
+      </div>
+
+      <div>
+        <div class="sect" style="margin-bottom:9px">装配状态</div>
+        <div class="grid" id="services"></div>
+      </div>
+
+      <div>
+        <div class="tabs">
+          <button class="on" data-tab="act">最近活动</button>
+          <button data-tab="log">运行日志</button>
+          <span class="grow"></span>
+          <span class="when" id="stamp"></span>
+        </div>
+      </div>
+      <div class="stream" id="act"><div class="empty">正在读取 …</div></div>
+      <div class="stream" id="log" style="display:none"><div class="empty">—</div></div>
+
+      <div class="hint" id="hint">「✕」与「⤓」都只是把启动器收进托盘，QQ / SnowLuma / Cortico 继续在后台跑。</div>
+    </main>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const CIRC = 2 * Math.PI * 56;
+const LV = { info: 'INFO', debug: 'DEBUG', warn: 'WARN', error: 'ERR' };
+let poll = null, lastBusy = false;
+
+function toast(msg) {
+  const hint = $('hint');
+  hint.textContent = msg;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => {
+    hint.textContent = '「✕」与「⤓」都只是把启动器收进托盘，QQ / SnowLuma / Cortico 继续在后台跑。';
+  }, 4200);
+}
+
+function esc(s) { return String(s == null ? '' : s); }
+
+function setRing(up, total) {
+  const frac = total ? up / total : 0;
+  const arc = $('arc');
+  arc.setAttribute('stroke-dasharray', CIRC.toFixed(1));
+  arc.setAttribute('stroke-dashoffset', (CIRC * (1 - frac)).toFixed(1));
+  const col = up === total ? '#34D399' : (up >= total - 2 ? '#FBBF24' : '#F8717A');
+  arc.style.stroke = col;
+  $('cnt').innerHTML = up + '<small>/' + total + '</small>';
+}
+
+function renderServices(list) {
+  const box = $('services');
+  box.innerHTML = '';
+  list.forEach(s => {
+    const el = document.createElement('div');
+    el.className = 'svc' + (s.up ? ' up' : '');
+    const d = document.createElement('div'); d.className = 'dot';
+    const t = document.createElement('div'); t.className = 'txt';
+    const b = document.createElement('b'); b.textContent = s.name;
+    const i = document.createElement('i'); i.textContent = s.detail;
+    t.append(b, i);
+    const st = document.createElement('div'); st.className = 'st';
+    st.textContent = s.up ? '在线' : '离线';
+    el.append(d, t, st);
+    box.appendChild(el);
+  });
+}
+
+function renderProvider(p) {
+  $('p-active').textContent = p.active || '未知（守护未运行或控制台未响应）';
+  const chips = [];
+  if (p.active && p.primary && p.active === p.primary) chips.push(['主用 · 免费池', 'ok']);
+  else if (p.active && p.fallback && p.active === p.fallback) chips.push(['已切备用 · 渠道网关', 'warn']);
+  chips.push([(p.switches || 0) + '/' + (p.maxSwitches || 12) + ' 今日切换', '']);
+  chips.push(['探测 ' + (p.probeEvery || 60) + 's', '']);
+  const box = $('p-chips');
+  box.innerHTML = '';
+  chips.forEach(([txt, cls]) => {
+    const c = document.createElement('span');
+    c.className = 'chip ' + cls;
+    c.textContent = txt;
+    box.appendChild(c);
+  });
+}
+
+function renderActivity(items, run) {
+  const box = $('act');
+  box.innerHTML = '';
+  if (!items || !items.length) {
+    box.innerHTML = '<div class="empty">暂时没有可显示的活动。发起一轮对话后这里会出现。</div>';
+    return;
+  }
+  items.forEach(a => {
+    const row = document.createElement('div');
+    row.className = 'row ' + (a.level === 'warn' ? 'warn' : a.level === 'error' ? 'error' : '');
+    const t = document.createElement('span'); t.className = 't'; t.textContent = a.ts;
+    const lv = document.createElement('span'); lv.className = 'lv'; lv.textContent = LV[a.level] || a.level;
+    const m = document.createElement('span'); m.className = 'm'; m.textContent = a.area + ' · ' + a.msg;
+    row.append(t, lv, m);
+    box.appendChild(row);
+  });
+}
+
+function renderLog(lines) {
+  const box = $('log');
+  box.innerHTML = '';
+  if (!lines || !lines.length) {
+    box.innerHTML = '<div class="empty">—</div>';
+    return;
+  }
+  lines.forEach(l => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const m = document.createElement('span'); m.className = 'm'; m.textContent = l;
+    row.appendChild(m);
+    box.appendChild(row);
+  });
+}
+
+async function refresh() {
+  try {
+    const s = await window.pywebview.api.get_status();
+    setRing(s.services.filter(x => x.up).length, s.services.length);
+    const up = s.services.filter(x => x.up).length;
+    const total = s.services.length;
+    const v = $('verdict');
+    if (s.allUp) {
+      v.innerHTML = '全部就绪<sub>可以聊了</sub>';
+    } else if (s.core) {
+      v.innerHTML = '核心在线<sub>有 ' + (total - up) + ' 项未就绪</sub>';
+    } else {
+      v.innerHTML = '未就绪<sub>点「启动全部」拉起</sub>';
+    }
+    renderServices(s.services);
+    renderProvider(s.provider);
+    renderActivity(s.activity, s.run);
+    renderLog(s.log);
+    const r = s.run;
+    $('meta-run').innerHTML = r
+      ? '最新一轮 ' + esc(r.startedAt) + '<br>' + esc(r.id) + ' · ' + esc(r.worlds) + ' 个 World'
+      : '暂无运行记录';
+    $('meta-base').textContent = s.base;
+    $('stamp').textContent = s.ts + ' · 启动 ' + s.uptime;
+
+    const btn = $('b-start');
+    btn.disabled = !!s.busy;
+    btn.textContent = s.busy ? '启动中 …' : '启动全部';
+    lastBusy = !!s.busy;
+  } catch (e) {
+    $('verdict').innerHTML = '界面通信失败<sub>' + esc(e && e.message ? e.message : e) + '</sub>';
+  }
+}
+
+function tabTo(name) {
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
+  $('act').style.display = name === 'act' ? '' : 'none';
+  $('log').style.display = name === 'log' ? '' : 'none';
+}
+
+async function boot() {
+  try {
+    const info = await window.pywebview.api.get_status();
+    $('ver').textContent = 'v' + info.version;
+    document.title = 'AI启动器';
+  } catch (e) { /* ignore */ }
+
+  document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => tabTo(b.dataset.tab));
+  $('b-start').onclick = async () => {
+    $('b-start').disabled = true;
+    $('b-start').textContent = '启动中 …';
+    toast('正在按顺序拉起各组件 …');
+    await window.pywebview.api.start_all();
+    setTimeout(refresh, 1500);
+  };
+  $('b-refresh').onclick = () => { toast('已刷新。'); refresh(); };
+  $('b-min').onclick = () => window.pywebview.api.minimize_window();
+  $('b-hide').onclick = () => { toast('已收进托盘。'); window.pywebview.api.hide_window(); };
+  $('b-quit').onclick = () => { toast('已收进托盘，服务继续运行。'); window.pywebview.api.hide_window(); };
+  $('b-exit').onclick = () => window.pywebview.api.quit_app();
+  $('b-console').onclick = () => window.pywebview.api.open_console();
+  $('b-snow').onclick = () => window.pywebview.api.open_snowluma();
+
+  await refresh();
+  poll = setInterval(refresh, 2000);
+}
+
+window.addEventListener('pywebviewready', boot);
+</script>
+</body>
+</html>
