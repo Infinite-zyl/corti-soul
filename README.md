@@ -1,4 +1,4 @@
-# persona-stack
+# corti-soul
 
 把 [Cortico](https://github.com/Pal-AI-Lab/Cortico) 从"能跑"收拾成"能天天挂着用"的一组补丁、守护脚本和一个桌面启动器。
 
@@ -86,7 +86,7 @@ Cortico **没有**原生的模型 fallback：`activeProvider` 是单值，`loop.
 <栈根>/
 ├─ SnowLuma/                    # 第三方，自行安装
 ├─ cortico-qq/                  # Cortico 检出（需自行 clone + pnpm install）
-├─ persona-stack/               # ← 本仓库
+├─ corti-soul/                  # ← 本仓库
 │   ├─ patches/                 # 5 个补丁脚本（幂等，可重复运行）
 │   ├─ guard/                   # 上游配额守护 + 它的配置/状态文件
 │   ├─ launcher/                # 桌面启动器源码与构建工作区

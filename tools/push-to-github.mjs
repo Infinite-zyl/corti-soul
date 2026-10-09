@@ -17,7 +17,7 @@ import { execFileSync } from 'node:child_process';
 const TOOLS_DIR = import.meta.dirname;
 const REPO_DIR = path.resolve(TOOLS_DIR, '..');
 const TOKEN_FILE = path.join(TOOLS_DIR, '.gh_token');
-const REPO_NAME = 'persona-stack';
+const REPO_NAME = 'corti-soul';
 const PRIVATE = true;
 
 const PROXY = { host: '127.0.0.1', port: 7897 };
@@ -46,7 +46,7 @@ function api(method, urlPath, payload) {
         const head = [
           `${method} ${urlPath} HTTP/1.1`,
           `Host: ${API}`,
-          'User-Agent: persona-stack-push',
+          'User-Agent: corti-soul-push',
           'Accept: application/vnd.github+json',
           'X-GitHub-Api-Version: 2022-11-28',
           `Authorization: Bearer ${TOKEN}`,

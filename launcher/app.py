@@ -85,7 +85,7 @@ def _resolve_base() -> pathlib.Path:
 
 
 def _find_pkg() -> pathlib.Path:
-    """找到 persona-stack 仓库根（含 guard/upstream-guard.mjs 的那层）。
+    """找到 corti-soul 仓库根（含 guard/upstream-guard.mjs 的那层）。
 
     源码运行时 ROOT 就是 <pkg>\\launcher；打包运行时 exe 在
     <pkg>\\launcher\\dist\\AI启动器\\ 里，往上找同样能命中。
