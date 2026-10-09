@@ -1,4 +1,4 @@
-"""AI启动器 — AI 人格启动器（Python 宿主 + WebView2 界面）。
+"""corti-soul 启动器 — 人格启动器（Python 宿主 + WebView2 界面）。
 
 管理本机常驻的这条链路：
     DSH 模型转发(18899) → QQ 客户端 → SnowLuma(5099) → OneBot WS(3001)
@@ -58,7 +58,7 @@ def _resolve_base() -> pathlib.Path:
     查找顺序：
       1. launcher.config.json 里的 "base"（显式指定，最优先）
       2. 从源码目录 / exe 所在目录一路往上找同时含 SnowLuma + cortico-qq 的目录
-         （打包后 exe 在 <pkg>\\launcher\\dist\\AI启动器\\ 里，往上找同样能命中）
+         （打包后 exe 在 <pkg>\\launcher\\dist\\corti-soul启动器\\ 里，往上找同样能命中）
     """
     for cand_cfg in (ROOT / "launcher.config.json", ROOT.parent / "launcher.config.json"):
         if cand_cfg.is_file():
@@ -88,7 +88,7 @@ def _find_pkg() -> pathlib.Path:
     """找到 corti-soul 仓库根（含 guard/upstream-guard.mjs 的那层）。
 
     源码运行时 ROOT 就是 <pkg>\\launcher；打包运行时 exe 在
-    <pkg>\\launcher\\dist\\AI启动器\\ 里，往上找同样能命中。
+    <pkg>\\launcher\\dist\\corti-soul启动器\\ 里，往上找同样能命中。
     """
     for cand in [ROOT, *ROOT.parents]:
         if (cand / "guard" / "upstream-guard.mjs").is_file():
@@ -417,6 +417,7 @@ class Api:
         return {
             "ts": time.strftime("%H:%M:%S"),
             "version": APP_VERSION,
+            "appName": APP_NAME,
             "uptime": f"{round(time.time() - _START)}s",
             "serviceCount": len(svcs),
             "services": svcs,
@@ -588,7 +589,7 @@ def build_tray(api: Api):
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("退出启动器", on_quit),
     )
-    icon = pystray.Icon("AI启动器", image, "AI 人格启动器", menu)
+    icon = pystray.Icon("corti-soul", image, WINDOW_TITLE, menu)
     return icon
 
 

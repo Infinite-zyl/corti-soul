@@ -1,4 +1,4 @@
-# AI启动器
+# corti-soul 启动器
 
 把人格唤起来
 
@@ -11,10 +11,12 @@
 ## Build the .exe
 
 ```powershell
-.\.venv\Scripts\pyinstaller.exe --noconfirm --clean AI启动器.spec
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean "corti-soul启动器.spec"
 ```
 
-Output: `dist\AI启动器\AI启动器.exe`
+Output: `dist\corti-soul启动器\corti-soul启动器.exe`
+
+> 用 `python -m PyInstaller` 而不是 `.venv\Scripts\pyinstaller.exe`：后者会以 exit 1 静默失败（无输出）。
 
 ## Where things live
 
@@ -27,4 +29,4 @@ Output: `dist\AI启动器\AI启动器.exe`
 | `brand/version_info.txt` | What Explorer/Task Manager display |
 | `coreclr_env.py` | Makes pywebview work on modern .NET |
 
-> Rebrand anytime: `python <skill>/scripts/make_icon.py "AI启动器" --out brand --preview`
+> Rebrand anytime: `python <skill>/scripts/make_icon.py "corti-soul启动器" --glyph CS --out brand --preview`

@@ -90,8 +90,8 @@ Cortico **没有**原生的模型 fallback：`activeProvider` 是单值，`loop.
 │   ├─ patches/                 # 5 个补丁脚本（幂等，可重复运行）
 │   ├─ guard/                   # 上游配额守护 + 它的配置/状态文件
 │   ├─ launcher/                # 桌面启动器源码与构建工作区
-│   │   ├─ app.py coreclr_env.py AI启动器.spec brand/ ui/
-│   │   └─ dist/AI启动器/       # 打包产物（不入库）
+│   │   ├─ app.py coreclr_env.py corti-soul启动器.spec brand/ ui/
+│   │   └─ dist/corti-soul启动器/   # 打包产物（不入库）
 │   ├─ scripts/                 # start-ai.ps1
 │   ├─ tools/                   # 建仓/推送等一次性工具（token 不入库）
 │   └─ legacy/                  # 被取代的旧实现（C# 启动器、未脱敏原版脚本；不入库）
@@ -135,10 +135,10 @@ cd launcher
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install pywebview pyinstaller pillow
 .\.venv\Scripts\python.exe app.py                     # 开发
-.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean AI启动器.spec   # 打包
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean "corti-soul启动器.spec"   # 打包
 ```
 
-产物在 `launcher\dist\AI启动器\`，双击其中的 `AI启动器.exe` 即可（托盘常驻，关窗不退出）。
+产物在 `launcher\dist\corti-soul启动器\`，双击其中的 `corti-soul启动器.exe` 即可（托盘常驻，关窗不退出）。
 
 > 用 `python -m PyInstaller` 而不是 `.venv\Scripts\pyinstaller.exe`：本机实测后者会以 exit 1 静默失败，前者正常。
 

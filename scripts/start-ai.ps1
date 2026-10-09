@@ -1,5 +1,5 @@
 ﻿# ============================================================
-# AI 人格启动器 —— 按序拉起 QQ → SnowLuma → Cortico，并做健康检查。
+# corti-soul 启动器（PowerShell 版）—— 按序拉起 QQ → SnowLuma → Cortico，并做健康检查。
 # DSH 不由本脚本管理（请自行设置开机自启），这里只探测它的状态。
 # 幂等：组件已在运行时跳过，不会重复启动。可反复双击运行。
 # ============================================================
@@ -47,7 +47,7 @@ function Test-CorticoProcess {
 }
 
 Write-Host ""
-Write-Host "=== AI 人格启动器 ===" -ForegroundColor Cyan
+Write-Host "=== corti-soul 启动器 ===" -ForegroundColor Cyan
 Write-Host ""
 
 # ---------- 1) DSH（只探测，不启动） ----------

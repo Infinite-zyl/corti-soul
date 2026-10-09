@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 *.pyo
 .wheels/
+launcher/brand/icon-preview.png
 
 # ---- 运行期状态（含实例相关的私密数据，绝不入库）----
 guard/upstream-guard-state.json

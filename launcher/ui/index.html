@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="color-scheme" content="dark">
-<title>AI启动器</title>
+<title>corti-soul 启动器</title>
 <style>
   :root{
     --light:#B975F9; --base:#A855F7; --accent:#EC4899;
@@ -188,8 +188,8 @@
 
   <div class="titlebar">
     <div class="orb"></div>
-    <b>AI 人格启动器</b>
-    <span class="tag" id="ver">v2.0.0</span>
+    <b id="appname">corti-soul 启动器</b>
+    <span class="tag" id="ver">v2.1.0</span>
     <span class="grow drag"></span>
     <button class="wbtn" id="b-min" title="最小化">–</button>
     <button class="wbtn" id="b-hide" title="收进托盘（后台继续运行）">⤓</button>
@@ -403,7 +403,7 @@ async function boot() {
   try {
     const info = await window.pywebview.api.get_status();
     $('ver').textContent = 'v' + info.version;
-    document.title = 'AI启动器';
+    if (info.appName) { $('appname').textContent = info.appName; document.title = info.appName; }
   } catch (e) { /* ignore */ }
 
   document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => tabTo(b.dataset.tab));

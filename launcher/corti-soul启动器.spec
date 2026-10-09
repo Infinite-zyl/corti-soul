@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""AI启动器 — one-folder build.
+"""corti-soul 启动器 — one-folder build.
 
 one-folder rather than one-file: the one-file bootloader unpacks itself into
 %TEMP% on every launch, which fails on locked-down or redirected Windows
@@ -27,7 +27,7 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, [],
     exclude_binaries=True,
-    name='AI启动器',
+    name='corti-soul启动器',
     debug=False, bootloader_ignore_signals=False, strip=False,
     upx=False,
     console=False,
@@ -40,5 +40,5 @@ exe = EXE(
 coll = COLLECT(
     exe, a.binaries, a.datas,
     strip=False, upx=False, upx_exclude=[],
-    name='AI启动器',
+    name='corti-soul启动器',
 )
