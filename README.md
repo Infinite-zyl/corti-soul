@@ -31,18 +31,13 @@
 
 ### 2. 上游配额守护（`guard/`）
 
-Cortico **没有**原生的模型 fallback：`activeProvider` 是单值，`loop.ts` 的 `DEFAULT_RESUBMIT` 只重试同一个端点。
+Cortico 的 `activeProvider` 是单值，原生重试不会切换端点。DSH 插件目前接入了不同来源的免费车道：Zen 与 Kilo；同一车道里改模型不能保证换到独立限额。
 
-而免费池的限流有个反直觉的性质（读 `dsh-our-free-model` 源码得出）：
-
-- 配额是**按会话**算的，不是按模型 —— `sessionForConversation()` 只从 `sessionId` 派生上游会话 id，**与模型名无关**。所以「换个免费模型」换不掉限流。
-- 那条车道的 429 带**递增的 retry-after**，两次自动重试会让同一轮"付费三次、还来得更晚"。
-
-`upstream-guard.mjs` 因此换的是**上游**而不是模型：常驻免费池，探测到不可用就通过控制台 API 切到渠道网关，恢复了再切回。它只做「探测 + 切 `activeProvider`」，不代理请求，本身不消耗 token。
+`upstream-guard.mjs` 监听 Cortico 的最终 LLM 失败日志，按 `freeProviders` 顺序切换 Zen、Kilo 等免费端点，免费候选都失败后才切到付费备用。它不发合成模型探测请求，因此不会为了健康检查额外占用上游额度。若 Zen 端点尚不存在，守护可从现有 Kilo 端点复制配置创建，只改模型 ID，不读取或打印密钥明文。冷却期结束后会恢复优先免费车道，由下一次真实请求确认是否恢复。
 
 ### 3. 桌面启动器（`launcher/`）
 
-一个托盘常驻的 GUI（Python + pywebview + WebView2），把上面这些按序拉起来并显示健康状态。**窗口是可选的前台**：关掉它，后台服务照常跑。
+一个托盘常驻的 GUI（Python + pywebview + WebView2），把上面这些按序拉起来并显示健康状态。服务卡可启停 SnowLuma、OneBot WS、Cortico 和免费池守护；「⤓」收进托盘后服务继续运行，关闭窗口或选择退出会停止这些托管服务。
 
 ---
 
@@ -126,7 +121,7 @@ node patches/patch-qqbot-bugs2.mjs   # 依赖前一个的产物，顺序别换
 node guard/upstream-guard.mjs
 ```
 
-首次运行会在 `guard/` 下生成 `upstream-guard.json`。里面的 `primary` / `fallback` 填你**自己** Cortico 里的端点名。
+首次运行会在 `guard/` 下生成 `upstream-guard.json`。默认顺序是现有 Kilo 端点 → 自动创建的 Zen MiMo 端点 → 付费备用。端点名和模型 ID 均可在配置中调整。
 
 ### 起启动器
 
@@ -138,7 +133,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean "corti-soul启动器.spec"   # 打包
 ```
 
-产物在 `launcher\dist\corti-soul启动器\`，双击其中的 `corti-soul启动器.exe` 即可（托盘常驻，关窗不退出）。
+产物在 `launcher\dist\corti-soul启动器\`，双击其中的 `corti-soul启动器.exe` 即可（⤓ 隐藏到托盘继续运行；关闭窗口会停止托管服务并退出）。
 
 > 用 `python -m PyInstaller` 而不是 `.venv\Scripts\pyinstaller.exe`：本机实测后者会以 exit 1 静默失败，前者正常。
 

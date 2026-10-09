@@ -23,6 +23,7 @@ import webbrowser
 
 import coreclr_env  # noqa: F401  — 必须在 import webview 之前导入
 import webview
+from webview.window import FixPoint
 
 ROOT = pathlib.Path(__file__).parent
 BRAND = json.loads((ROOT / "brand" / "brand.json").read_text(encoding="utf-8"))
@@ -159,6 +160,67 @@ def guard_running() -> bool:
         up = False
     _guard_cache.update(ts=now, up=up)
     return up
+
+
+def guard_pids() -> list[int]:
+    """Return only Node processes running this exact guard script."""
+    ps = (
+        "$ErrorActionPreference='SilentlyContinue'; "
+        "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | "
+        "Where-Object { $_.CommandLine -match '(?i)(^|[\\\\/\" ])upstream-guard\\.mjs([\" ]|$)' } | "
+        "ForEach-Object { $_.ProcessId }"
+    )
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True, text=True, timeout=12,
+            creationflags=CREATE_NO_WINDOW,
+        ).stdout
+        return [int(line.strip()) for line in (out or "").splitlines() if line.strip().isdigit()]
+    except Exception:
+        return []
+
+
+def pids_for_port(port: int) -> list[int]:
+    """Find listener PIDs without relying on an optional Python package."""
+    try:
+        out = subprocess.run(
+            ["netstat", "-ano", "-p", "tcp"], capture_output=True,
+            text=True, timeout=6, creationflags=CREATE_NO_WINDOW,
+        ).stdout
+    except Exception:
+        return []
+    found = set()
+    suffix = f":{port}"
+    for line in (out or "").splitlines():
+        fields = line.split()
+        if len(fields) < 5 or fields[-2].upper() != "LISTENING":
+            continue
+        if fields[1].rsplit(":", 1)[-1] != str(port):
+            continue
+        if fields[1].endswith(suffix) and fields[-1].isdigit():
+            found.add(int(fields[-1]))
+    return sorted(found)
+
+
+def stop_process_tree(pids: list[int]) -> tuple[list[int], list[str]]:
+    stopped, errors = [], []
+    for pid in sorted(set(pids)):
+        if pid <= 0 or pid == os.getpid():
+            continue
+        try:
+            result = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True, text=True, timeout=10,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            if result.returncode == 0:
+                stopped.append(pid)
+            elif "not found" not in (result.stdout + result.stderr).lower():
+                errors.append((result.stderr or result.stdout or f"PID {pid} 无法停止").strip())
+        except Exception as e:
+            errors.append(str(e))
+    return stopped, errors
 
 
 def active_provider() -> str | None:
@@ -329,8 +391,13 @@ class Api:
         self._window: webview.Window | None = None
         self._tray = None
         self._logs: collections.deque = collections.deque(maxlen=300)
+        self._launched_pids: dict[str, set[int]] = collections.defaultdict(set)
+        self._process_lock = threading.RLock()
+        self._service_actions: dict[str, str] = {}
+        self._action_lock = threading.Lock()
         self.busy = False
         self._quitting = False
+        self._shutdown_done = False
         self._log("启动器就绪。")
 
     # ---- 基础设施 ---------------------------------------------------------- #
@@ -339,6 +406,17 @@ class Api:
 
     def _log(self, msg: str) -> None:
         self._logs.append(f"[{time.strftime('%H:%M:%S')}] {msg}")
+
+    def _launch(self, service_id: str, args: list[str], *, cwd: pathlib.Path, env: dict) -> subprocess.Popen:
+        with self._process_lock:
+            if self._quitting:
+                raise RuntimeError("启动器正在退出")
+            proc = subprocess.Popen(
+                args, cwd=str(cwd), env=env, creationflags=_FLAGS, close_fds=True,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            self._launched_pids[service_id].add(proc.pid)
+            return proc
 
     # ---- 窗口控制 ---------------------------------------------------------- #
     def hide_window(self) -> dict:
@@ -349,6 +427,14 @@ class Api:
     def show_window(self) -> dict:
         if self._window:
             self._window.show()
+            try:
+                self._window.evaluate_js(
+                    "document.body.classList.remove('window-minimizing');"
+                    "document.body.classList.add('window-restoring');"
+                    "setTimeout(() => document.body.classList.remove('window-restoring'), 220);"
+                )
+            except Exception:
+                pass
         return {"ok": True}
 
     def minimize_window(self) -> dict:
@@ -356,8 +442,23 @@ class Api:
             self._window.minimize()
         return {"ok": True}
 
+    def resize_window(self, width: int, height: int, edge: str) -> dict:
+        if not self._window:
+            return {"ok": False}
+        width, height = max(860, int(width)), max(600, int(height))
+        fix = FixPoint.NORTH | FixPoint.WEST
+        if "w" in edge:
+            fix = (fix & ~FixPoint.WEST) | FixPoint.EAST
+        if "n" in edge:
+            fix = (fix & ~FixPoint.NORTH) | FixPoint.SOUTH
+        self._window.resize(width, height, fix)
+        return {"ok": True}
+
     def quit_app(self) -> dict:
-        self._log("退出启动器（后台服务继续运行）。")
+        if not self._quitting:
+            self._quitting = True
+            self._log("正在退出并停止 SnowLuma / OneBot WS / Cortico / 免费池守护 …")
+            self._stop_stack_services()
         self._quitting = True
         if self._tray is not None:
             try:
@@ -372,20 +473,213 @@ class Api:
         return {"ok": True}
 
     def on_closing(self) -> bool:
-        """点右上角 ✕ 时收进托盘，而不是退出。返回 False 表示取消关闭。"""
-        if self._quitting:
-            return True
-        if self.state_snapshot().get("tray"):
-            try:
-                if self._window:
-                    self._window.hide()
-            except Exception:
-                pass
-            return False
+        """关闭窗口等同于退出；收进托盘使用单独的隐藏按钮。"""
+        if not self._quitting:
+            self._quitting = True
+            self._log("窗口关闭，正在停止托管服务 …")
+            self._stop_stack_services()
+            if self._tray is not None:
+                try:
+                    self._tray.stop()
+                except Exception:
+                    pass
         return True
 
     def state_snapshot(self) -> dict:
         return {"tray": self._tray is not None}
+
+    def _stop_stack_services(self) -> None:
+        """Stop the four chain services the launcher owns on explicit exit."""
+        with self._process_lock:
+            if self._shutdown_done:
+                return
+            self._shutdown_done = True
+            pids = set()
+            for port in (5099, 3001, 7788):
+                pids.update(pids_for_port(port))
+            pids.update(guard_pids())
+            for service_id in ("snow", "onebot", "cortico", "guard"):
+                pids.update(self._launched_pids.get(service_id, set()))
+        stopped, errors = stop_process_tree(list(pids))
+        _guard_cache.update(ts=0.0, up=False)
+        if stopped:
+            self._log(f"已停止托管服务进程：{', '.join(map(str, stopped))}。")
+        else:
+            self._log("托管服务已离线，无需停止。")
+        for error in errors:
+            self._log(f"停止服务失败：{error[:160]}")
+
+    def _action_targets(self, service_id: str) -> list[str]:
+        return ["snow", "onebot"] if service_id in {"snow", "onebot"} else [service_id]
+
+    def _begin_service_action(self, service_id: str, action: str) -> tuple[bool, list[str]]:
+        targets = self._action_targets(service_id)
+        with self._action_lock:
+            if any(self._service_actions.get(target) for target in targets):
+                return False, targets
+            for target in targets:
+                self._service_actions[target] = action
+        return True, targets
+
+    def _end_service_action(self, targets: list[str]) -> None:
+        with self._action_lock:
+            for target in targets:
+                self._service_actions.pop(target, None)
+
+    def stop_service(self, service_id: str) -> dict:
+        if service_id not in {"snow", "onebot", "cortico", "guard"}:
+            return {"ok": False, "msg": "此服务不支持在启动器内停止。"}
+        acquired, targets = self._begin_service_action(service_id, "stopping")
+        if not acquired:
+            return {"ok": False, "msg": "该服务正在处理中，请稍候。"}
+        try:
+            return self._stop_service_impl(service_id)
+        finally:
+            self._end_service_action(targets)
+
+    def start_service(self, service_id: str) -> dict:
+        if service_id not in {"snow", "onebot", "cortico", "guard"}:
+            return {"ok": False, "msg": "此服务不支持在启动器内启动。"}
+        if self._quitting:
+            return {"ok": False, "msg": "启动器正在退出。"}
+        acquired, targets = self._begin_service_action(service_id, "starting")
+        if not acquired:
+            return {"ok": False, "msg": "该服务正在处理中，请稍候。"}
+        try:
+            return self._start_service_impl(service_id)
+        finally:
+            self._end_service_action(targets)
+
+    def _stop_service_impl(self, service_id: str) -> dict:
+        """Stop the process behind one visible service; shared listeners are reported."""
+        service = next((s for s in list_services() if s["id"] == service_id), None)
+        if service is None:
+            return {"ok": False, "msg": "未知服务。"}
+        if service["kind"] == "guard":
+            pids = guard_pids() + list(self._launched_pids.get(service_id, set()))
+        elif service["kind"] == "proc":
+            try:
+                result = subprocess.run(
+                    ["taskkill", "/IM", service["arg"], "/T", "/F"],
+                    capture_output=True, text=True, timeout=10,
+                    creationflags=CREATE_NO_WINDOW,
+                )
+                _guard_cache.update(ts=0.0, up=False)
+                if result.returncode == 0:
+                    msg = f"已停止 {service['name']}。"
+                    self._log(msg)
+                    return {"ok": True, "msg": msg, "stopped": [service_id]}
+                if "not found" in (result.stdout + result.stderr).lower():
+                    return {"ok": True, "msg": f"{service['name']} 已离线。", "stopped": []}
+                return {"ok": False, "msg": (result.stderr or result.stdout or "停止失败").strip()}
+            except Exception as e:
+                return {"ok": False, "msg": f"停止 {service['name']} 失败：{e}"}
+        else:
+            pids = pids_for_port(service["arg"]) + list(self._launched_pids.get(service_id, set()))
+
+        if not pids:
+            return {"ok": True, "msg": f"{service['name']} 已离线。", "stopped": []}
+        affected = [
+            s for s in list_services()
+            if s["kind"] == "port" and set(pids_for_port(s["arg"])) & set(pids)
+        ]
+        stopped, errors = stop_process_tree(pids)
+        if service["id"] == "guard":
+            _guard_cache.update(ts=0.0, up=False)
+        stopped_ids = [s["id"] for s in affected] or [service_id]
+        error_msg = errors[0][:160] if errors else ""
+        if stopped:
+            names = [s["name"] for s in affected] or [service["name"]]
+            msg = f"已停止 {'、'.join(names)}。"
+            self._log(msg)
+        else:
+            msg = f"正在确认 {service['name']} 已停止。"
+        verify_ids = set(stopped_ids) | {service_id}
+        deadline = time.time() + 6
+        while time.time() < deadline and any(self._service_is_up(sid) for sid in verify_ids):
+            time.sleep(0.12)
+        still_up = [sid for sid in verify_ids if self._service_is_up(sid)]
+        if still_up:
+            suffix = f"；{error_msg}" if error_msg else ""
+            msg = f"停止请求未完成，服务仍在线（{', '.join(still_up)}）{suffix}。"
+            self._log(msg)
+            return {"ok": False, "msg": msg, "stopped": []}
+        if not stopped:
+            msg = f"{service['name']} 已确认停止。"
+            self._log(msg)
+        return {"ok": True, "msg": msg, "stopped": stopped_ids}
+
+    def _service_is_up(self, service_id: str) -> bool:
+        if service_id == "snow":
+            return port_open(5099)
+        if service_id == "onebot":
+            return port_open(3001)
+        if service_id == "cortico":
+            return port_open(7788)
+        if service_id == "guard":
+            _guard_cache["ts"] = 0.0
+            return guard_running()
+        return False
+
+    def _start_service_impl(self, service_id: str) -> dict:
+        if service_id in {"snow", "onebot"}:
+            if service_id == "onebot" and port_open(3001):
+                return {"ok": True, "msg": "OneBot WS 已在线。"}
+            if not port_open(5099):
+                node = find_node()
+                if not node:
+                    return {"ok": False, "msg": "没找到 node.exe，无法启动 SnowLuma。"}
+                env = dict(os.environ)
+                env["SNOWLUMA_ONEBOT_HTTP_PORT"] = "3005"
+                try:
+                    self._launch("snow", [node, "index.mjs"], cwd=SNOW, env=env)
+                except Exception as e:
+                    return {"ok": False, "msg": f"启动 SnowLuma 失败：{e}"}
+                if not wait_port(5099, 60, "SnowLuma WebUI", self._log, lambda: self._quitting):
+                    return {"ok": False, "msg": "SnowLuma 启动超时。"}
+            if service_id == "snow":
+                return {"ok": True, "msg": "SnowLuma 已启动。"}
+            if wait_port(3001, 15, "OneBot WS", self._log, lambda: self._quitting):
+                return {"ok": True, "msg": "SnowLuma 和 OneBot WS 已就绪。"}
+            webbrowser.open(SNOW_WEBUI)
+            return {"ok": True, "msg": "SnowLuma 在线；请在其 WebUI 中重新接入 QQ，OneBot WS 才会启动。"}
+
+        node = find_node()
+        if not node:
+            return {"ok": False, "msg": "没找到 node.exe，无法启动服务。"}
+        if service_id == "cortico":
+            if port_open(7788):
+                return {"ok": True, "msg": "Cortico 控制台已在线。"}
+            env = dict(os.environ)
+            env["CORTICO_START_PAUSED"] = "0"
+            env.update(deploy_env())
+            try:
+                self._launch("cortico", [node, os.path.join("bin", "cortico.mjs"), DEPLOY], cwd=CORTICO, env=env)
+            except Exception as e:
+                return {"ok": False, "msg": f"启动 Cortico 失败：{e}"}
+            if wait_port(7788, 90, "Cortico 控制台", self._log, lambda: self._quitting):
+                return {"ok": True, "msg": "Cortico 控制台已启动。"}
+            return {"ok": False, "msg": "Cortico 启动超时。"}
+
+        if service_id == "guard":
+            _guard_cache["ts"] = 0.0
+            if guard_running():
+                return {"ok": True, "msg": "免费池守护已在线。"}
+            try:
+                _guard_cache["ts"] = 0.0
+                proc = self._launch("guard", [node, str(GUARD_SCRIPT)], cwd=GUARD_DIR, env=os.environ.copy())
+            except Exception as e:
+                return {"ok": False, "msg": f"启动免费池守护失败：{e}"}
+            deadline = time.time() + 12
+            while time.time() < deadline:
+                if guard_pids():
+                    _guard_cache.update(ts=time.time(), up=True)
+                    return {"ok": True, "msg": "免费池守护已启动。"}
+                if proc.poll() is not None:
+                    return {"ok": False, "msg": "免费池守护启动后立即退出，请查看日志。"}
+                time.sleep(0.4)
+            return {"ok": False, "msg": "免费池守护启动超时。"}
+        return {"ok": False, "msg": "未知服务。"}
 
     def open_console(self) -> dict:
         webbrowser.open(CONSOLE_URL)
@@ -399,6 +693,10 @@ class Api:
     # ---- 状态 -------------------------------------------------------------- #
     def get_status(self) -> dict:
         svcs = probe_all()
+        with self._action_lock:
+            actions = dict(self._service_actions)
+        for service in svcs:
+            service["action"] = actions.get(service["id"], "")
         guard_state = read_json(GUARD_STATE)
         guard_cfg = read_json(GUARD_CFG)
         items, run = recent_activity()
@@ -433,6 +731,8 @@ class Api:
 
     # ---- 启动全部 ---------------------------------------------------------- #
     def start_all(self) -> dict:
+        if self._quitting:
+            return {"ok": False, "msg": "启动器正在退出。"}
         if self.busy:
             return {"ok": False, "msg": "正在启动中，请稍候"}
         threading.Thread(target=self._start_all, daemon=True).start()
@@ -441,6 +741,8 @@ class Api:
     def _start_all(self) -> None:
         self.busy = True
         try:
+            if self._quitting:
+                return
             node = find_node()
 
             # ① DSH 模型转发
@@ -469,29 +771,30 @@ class Api:
                 return
 
             # ③ SnowLuma
+            if self._quitting:
+                return
             if port_open(5099):
                 self._log("SnowLuma 已在运行。")
             else:
                 env = dict(os.environ)
                 env["SNOWLUMA_ONEBOT_HTTP_PORT"] = "3005"
                 try:
-                    subprocess.Popen(
-                        [node, "index.mjs"], cwd=str(SNOW), env=env,
-                        creationflags=_FLAGS, close_fds=True,
-                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
+                    self._launch("snow", [node, "index.mjs"], cwd=SNOW, env=env)
                     self._log("已拉起 SnowLuma，等待 WebUI …")
                 except Exception as e:
                     self._log(f"拉起 SnowLuma 失败：{e}")
-                if wait_port(5099, 60, "SnowLuma WebUI", self._log):
+                if wait_port(5099, 60, "SnowLuma WebUI", self._log, lambda: self._quitting):
                     self._log("SnowLuma 就绪。")
+                if self._quitting:
+                    return
 
             # ④ OneBot WS
+            if self._quitting:
+                return
             if port_open(3001):
                 self._log("OneBot WS 已就绪。")
             else:
-                if wait_port(3001, 90, "OneBot WS", self._log):
+                if wait_port(3001, 90, "OneBot WS", self._log, lambda: self._quitting):
                     self._log("OneBot WS 就绪。")
                 else:
                     self._log(
@@ -500,6 +803,8 @@ class Api:
                     )
 
             # ⑤ Cortico
+            if self._quitting:
+                return
             if port_open(7788):
                 self._log("Cortico 已在运行。")
             else:
@@ -507,30 +812,23 @@ class Api:
                 env["CORTICO_START_PAUSED"] = "0"
                 env.update(deploy_env())
                 try:
-                    subprocess.Popen(
-                        [node, os.path.join("bin", "cortico.mjs"), DEPLOY],
-                        cwd=str(CORTICO), env=env,
-                        creationflags=_FLAGS, close_fds=True,
-                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
+                    self._launch("cortico", [node, os.path.join("bin", "cortico.mjs"), DEPLOY], cwd=CORTICO, env=env)
                     self._log("已拉起 Cortico，等待控制台 …")
                 except Exception as e:
                     self._log(f"拉起 Cortico 失败：{e}")
-                if wait_port(7788, 90, "Cortico 控制台", self._log):
+                if wait_port(7788, 90, "Cortico 控制台", self._log, lambda: self._quitting):
                     self._log("Cortico 就绪。")
+                if self._quitting:
+                    return
 
             # ⑥ 免费池守护
+            if self._quitting:
+                return
             if guard_running():
                 self._log("免费池守护已在运行。")
             else:
                 try:
-                    subprocess.Popen(
-                        [node, str(GUARD_SCRIPT)], cwd=str(GUARD_DIR),
-                        creationflags=_FLAGS, close_fds=True,
-                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
+                    self._launch("guard", [node, str(GUARD_SCRIPT)], cwd=GUARD_DIR, env=os.environ.copy())
                     self._log("已拉起免费池守护。")
                 except Exception as e:
                     self._log(f"拉起免费池守护失败：{e}")
@@ -544,12 +842,16 @@ class Api:
             self.busy = False
 
 
-def wait_port(port: int, seconds: int, what: str, log) -> bool:
+def wait_port(port: int, seconds: int, what: str, log, cancelled=lambda: False) -> bool:
     deadline = time.time() + seconds
     while time.time() < deadline:
+        if cancelled():
+            return False
         if port_open(port):
             return True
-        time.sleep(1)
+        time.sleep(0.25)
+    if cancelled():
+        return False
     log(f"{what} 等待超时（{seconds}s）。")
     return False
 
@@ -598,7 +900,7 @@ def build_tray(api: Api):
 # --------------------------------------------------------------------------- #
 def main() -> None:
     # 只有直接点中这些元素才拖窗，避免按钮被当成拖拽把手。
-    webview.settings["DRAG_REGION_SELECTOR"] = ".drag"
+    webview.settings["DRAG_REGION_SELECTOR"] = ".titlebar, .titlebar .grow, .titlebar b, .titlebar .tag, .titlebar .orb"
     webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
 
     html = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
@@ -611,9 +913,9 @@ def main() -> None:
         height=660,
         min_size=(860, 600),
         frameless=True,
-        easy_drag=True,
+        easy_drag=False,
         shadow=True,
-        resizable=False,
+        resizable=True,
         text_select=True,
         background_color="#0B0E14",
     )
@@ -626,7 +928,7 @@ def main() -> None:
             api._tray = tray
             try:
                 tray.run_detached()
-                api._log("已收进托盘，关窗不退出。")
+                api._log("托盘已就绪；⤓ 隐藏窗口继续运行，关闭窗口会停止托管服务。")
             except Exception as e:
                 api._tray = None
                 api._log(f"托盘启动失败：{e}")

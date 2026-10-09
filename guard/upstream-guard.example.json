@@ -1,19 +1,29 @@
 {
-  "_comment": "复制为 upstream-guard.json 后按需修改。真实文件含本地 QQ 号与 OneBot token，已被 .gitignore 排除。",
-
+  "_comment": "复制为 upstream-guard.json 后按需修改。Zen 端点会默认从 Kilo 端点复制创建，不复制任何密钥明文。",
   "corticoUrl": "http://127.0.0.1:7788",
-
-  "primary": "DSH_free_mimo-v26-flash",
-  "fallback": "DSH_free_deepseek-v41-flash",
-
-  "probeIntervalSec": 60,
+  "freeProviders": [
+    {
+      "name": "DSH_free_mimo-v26-flash",
+      "lane": "kilo",
+      "sideModel": "dots-studio/dots-3-note-preview:free"
+    },
+    {
+      "name": "DSH_free_zen-mimo-v26-flash",
+      "lane": "zen",
+      "model": "mimo-v2.6-flash-free",
+      "sideModel": "mimo-v2.6-flash-free",
+      "copyFrom": "DSH_free_mimo-v26-flash"
+    }
+  ],
+  "paidFallback": "DSH_free_deepseek-v41-flash",
+  "provisionMissingFreeProviders": true,
   "failuresToSwitch": 2,
-  "probeTimeoutMs": 20000,
-  "probeMaxTokens": 8,
-
-  "minFallbackStayMinutes": 5,
-  "maxFallbackSwitchesPerDay": 12,
-
+  "rateLimitCooldownMinutes": 30,
+  "transientCooldownMinutes": 5,
+  "hardFailureCooldownMinutes": 360,
+  "recoverFreeLaneAfterMinutes": 30,
+  "maxPaidSwitchesPerDay": 12,
+  "logPollIntervalMs": 1500,
   "notify": {
     "enabled": false,
     "httpUrl": "http://127.0.0.1:3005",

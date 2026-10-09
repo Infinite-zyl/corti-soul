@@ -1,59 +1,52 @@
 /**
- * 上游配额守护：优先免费池，撞限流自动切到渠道网关，免费池恢复了再切回来。
+ * Free-lane failover for Cortico, driven by real generation failures.
  *
- * 为什么需要它（读插件源码得出的事实）：
- *   · 免费池（18899，opencode.ai/zen）的配额是**按会话**算的，不是按模型。
- *     sessionForConversation() 只从 sessionId 派生上游会话 id，换模型换不掉限流。
- *   · 那条车道的 429 带**递增的 retry-after**，插件自己的注释说重试会把
- *     "同一轮付费三次、还来得更晚"。所以撞墙后该做的是换上游，不是重试。
- *   · 换上游才换配额池：18899 与 8326 是两套完全独立的额度。
- *
- * 策略：
- *   1. 默认驻留在免费池。
- *   2. 探测到免费池不可用（429/5xx/超时）→ 切到渠道网关备用端点，并在 QQ 里说一声。
- *   3. 之后按 backoff 周期探测免费池；一旦恢复 → 切回免费池。
- *   4. 渠道网关有积分成本，所以设了每日切换次数上限与最短驻留时间。
- *
- * 只做"探测 + 切 activeProvider"，不代理请求：不额外消耗 token。
+ * Do not run synthetic inference probes here: they consume the same free-lane
+ * request/session budget as normal traffic. The DSH plugin already maintains
+ * its own catalog/availability probes. This guard watches Cortico's run logs,
+ * switches across configured free-lane endpoints after a final LLM failure,
+ * and uses the paid endpoint only after the free candidates are unavailable.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 
-// ---------- 配置 ----------
-// 本脚本所在目录（放 upstream-guard.json / 状态文件），以及仓库根、cortico-qq。
 const GUARD_DIR = import.meta.dirname;
 const REPO_ROOT = path.resolve(GUARD_DIR, '..');
 const CORTICO = process.env.CORTICO_ROOT ?? path.join(REPO_ROOT, '..', 'cortico-qq');
 const CFG_PATH = process.env.GUARD_CONFIG ?? path.join(GUARD_DIR, 'upstream-guard.json');
+const RUNS_DIR = path.join(CORTICO, 'deployments', process.env.DEPLOY_NAME ?? 'mybot', 'data', 'runs');
 
 const DEFAULTS = {
-  /** Cortico 控制台地址。 */
   corticoUrl: 'http://127.0.0.1:7788',
-  /** 首选端点（免费池）。 */
-  primary: 'DSH_free_mimo-v26-flash',
-  /** 备用端点（渠道网关，有积分成本）。 */
-  fallback: 'DSH_free_deepseek-v41-flash',
-  /** 主池探测间隔（秒）。 */
-  probeIntervalSec: 60,
-  /** 主池连续失败几次才切换。1 = 一次失败就切。 */
+  freeProviders: [
+    { name: 'DSH_free_mimo-v26-flash', lane: 'kilo', sideModel: 'dots-studio/dots-3-note-preview:free' },
+    {
+      name: 'DSH_free_zen-mimo-v26-flash',
+      lane: 'zen',
+      model: 'mimo-v2.6-flash-free',
+      sideModel: 'mimo-v2.6-flash-free',
+      copyFrom: 'DSH_free_mimo-v26-flash',
+    },
+  ],
+  paidFallback: 'DSH_free_deepseek-v41-flash',
+  /** Create a missing lane endpoint by copying the configured source endpoint. */
+  provisionMissingFreeProviders: true,
+  /** Consecutive failed turns before switching on transient 5xx/network errors. */
   failuresToSwitch: 2,
-  /** 探测请求超时（毫秒）。 */
-  probeTimeoutMs: 20000,
-  /** 一次探测最多花多少输出 token。 */
-  probeMaxTokens: 8,
-  /** 切到备用后，最短驻留多久才允许切回（分钟）——避免来回抖。 */
-  minFallbackStayMinutes: 5,
-  /** 每日最多切到备用几次（保护渠道网关积分）。 */
-  maxFallbackSwitchesPerDay: 12,
-  /** 通过 OneBot HTTP 往 QQ 发通知。留空则不发。 */
+  /** Keep a failed lane out of rotation for this long when upstream gives no retry hint. */
+  rateLimitCooldownMinutes: 30,
+  transientCooldownMinutes: 5,
+  hardFailureCooldownMinutes: 360,
+  /** Once a higher-priority lane's cooldown expires, restore it without a synthetic request. */
+  recoverFreeLaneAfterMinutes: 30,
+  maxPaidSwitchesPerDay: 12,
+  logPollIntervalMs: 1500,
   notify: {
     enabled: true,
     httpUrl: 'http://127.0.0.1:3005',
     accessToken: process.env.ONEBOT_TOKEN ?? '',
-    /** 通知发给谁（私聊 QQ 号）。 */
     toUser: process.env.NOTIFY_QQ ?? '',
   },
-  /** 状态文件（记录当日切换次数）。 */
   statePath: process.env.GUARD_STATE ?? path.join(GUARD_DIR, 'upstream-guard-state.json'),
 };
 
@@ -61,116 +54,154 @@ function loadConfig() {
   if (!fs.existsSync(CFG_PATH)) {
     fs.writeFileSync(CFG_PATH, JSON.stringify(DEFAULTS, null, 2) + '\n', 'utf8');
     console.log(`[guard] 已生成默认配置 ${CFG_PATH}`);
-    return { ...DEFAULTS };
+    return structuredClone(DEFAULTS);
   }
   const raw = JSON.parse(fs.readFileSync(CFG_PATH, 'utf8'));
-  return { ...DEFAULTS, ...raw, notify: { ...DEFAULTS.notify, ...(raw.notify ?? {}) } };
+  // Migrate the former primary/fallback config without requiring a manual edit.
+  const freeProviders = Array.isArray(raw.freeProviders) && raw.freeProviders.length
+    ? raw.freeProviders
+    : [
+        { name: raw.primary ?? DEFAULTS.freeProviders[0].name, lane: 'kilo' },
+        {
+          ...DEFAULTS.freeProviders[1],
+          copyFrom: raw.primary ?? DEFAULTS.freeProviders[0].name,
+        },
+      ];
+  return {
+    ...DEFAULTS,
+    ...raw,
+    freeProviders,
+    paidFallback: raw.paidFallback ?? raw.fallback ?? DEFAULTS.paidFallback,
+    notify: { ...DEFAULTS.notify, ...(raw.notify ?? {}) },
+  };
 }
 
 const cfg = loadConfig();
+const state = loadState();
+const cursors = new Map();
+let stopping = false;
 
-// ---------- 状态 ----------
 function loadState() {
   try {
-    if (fs.existsSync(cfg.statePath)) return JSON.parse(fs.readFileSync(cfg.statePath, 'utf8'));
+    if (fs.existsSync(cfg?.statePath ?? path.join(GUARD_DIR, 'upstream-guard-state.json')))
+      return JSON.parse(fs.readFileSync(cfg?.statePath ?? path.join(GUARD_DIR, 'upstream-guard-state.json'), 'utf8'));
   } catch {}
-  return { day: today(), fallbackSwitches: 0, current: null, consecutiveFailures: 0, switchedToFallbackAt: 0 };
-}
-function saveState(s) {
-  try { fs.writeFileSync(cfg.statePath, JSON.stringify(s, null, 2) + '\n', 'utf8'); } catch {}
-}
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
-function log(msg) {
-  console.log(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] ${msg}`);
+  return {};
 }
 
-// ---------- Cortico API ----------
-async function getActive() {
-  const res = await fetch(`${cfg.corticoUrl}/api/providers`, { signal: AbortSignal.timeout(8000) });
-  if (!res.ok) throw new Error(`GET /api/providers ${res.status}`);
-  const j = await res.json();
-  return j.active;
-}
-
-async function activate(name) {
-  const res = await fetch(`${cfg.corticoUrl}/api/providers/${encodeURIComponent(name)}/activate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal: AbortSignal.timeout(15000),
-  });
-  const body = await res.text();
-  if (!res.ok) throw new Error(`activate ${name} → ${res.status} ${body.slice(0, 120)}`);
-  return true;
-}
-
-/** 读某个端点的 baseUrl / model，用来直接探测上游。 */
-async function readEndpoint(name) {
-  const res = await fetch(`${cfg.corticoUrl}/api/providers/${encodeURIComponent(name)}`, { signal: AbortSignal.timeout(8000) });
-  if (!res.ok) return null;
-  const j = await res.json();
-  return { baseUrl: j.entry?.baseUrl, model: j.entry?.spec?.model, secret: j.entry?.secret };
-}
-
-/** 从端点目录读密钥（控制台不回传明文）。 */
-function readSecret(secretName) {
-  if (!secretName) return '';
-  // 先看进程环境
-  if (process.env[secretName]) return process.env[secretName];
-  // 再看 providers 目录下各端点的 .env
-  const dir = path.join(CORTICO, 'deployments', 'providers');
-  try {
-    for (const d of fs.readdirSync(dir)) {
-      const f = path.join(dir, d, '.env');
-      if (!fs.existsSync(f)) continue;
-      const m = new RegExp(`^\\s*${secretName}\\s*=\\s*(\\S+)`, 'm').exec(fs.readFileSync(f, 'utf8'));
-      if (m) return m[1];
-    }
-    // 部署级 .env
-    const dep = path.join(CORTICO, 'deployments', process.env.DEPLOY_NAME ?? 'mybot', '.env');
-    if (fs.existsSync(dep)) {
-      const m = new RegExp(`^\\s*${secretName}\\s*=\\s*(\\S+)`, 'm').exec(fs.readFileSync(dep, 'utf8'));
-      if (m) return m[1];
-    }
-  } catch {}
-  return '';
-}
-
-/**
- * 探测一个端点是否可用。发一条极小请求，只看状态码。
- * 429 / 5xx / 超时都算不可用。
- */
-async function probe(name) {
-  const ep = await readEndpoint(name);
-  if (!ep?.baseUrl || !ep?.model) return { ok: false, reason: '端点配置不完整' };
-  const key = readSecret(ep.secret);
-  const t0 = Date.now();
-  try {
-    const res = await fetch(`${ep.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(key ? { Authorization: `Bearer ${key}` } : {}),
-      },
-      body: JSON.stringify({
-        model: ep.model,
-        messages: [{ role: 'user', content: 'ping' }],
-        max_tokens: cfg.probeMaxTokens,
-      }),
-      signal: AbortSignal.timeout(cfg.probeTimeoutMs),
-    });
-    const ms = Date.now() - t0;
-    if (res.ok) return { ok: true, ms };
-    const body = await res.text();
-    return { ok: false, reason: `HTTP ${res.status} ${body.slice(0, 100)}`, status: res.status, ms };
-  } catch (e) {
-    return { ok: false, reason: String(e.message).slice(0, 100) };
+function saveState() {
+  try { fs.writeFileSync(cfg.statePath, JSON.stringify(state, null, 2) + '\n', 'utf8'); } catch (e) {
+    log(`状态写入失败: ${String(e.message).slice(0, 100)}`);
   }
 }
 
-// ---------- QQ 通知 ----------
-async function notify(text) {
+function log(message) {
+  console.log(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] ${message}`);
+}
+
+function todayShanghai() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date());
+  const get = (type) => parts.find((part) => part.type === type)?.value ?? '00';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+async function api(pathname, options = {}) {
+  const { timeoutMs = 10000, ...init } = options;
+  return fetch(`${cfg.corticoUrl.replace(/\/+$/, '')}${pathname}`, {
+    ...init,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+}
+
+async function getActive() {
+  const res = await api('/api/providers');
+  if (!res.ok) throw new Error(`GET providers HTTP ${res.status}`);
+  return (await res.json()).active;
+}
+
+async function getProvider(name) {
+  const res = await api(`/api/providers/${encodeURIComponent(name)}`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`GET provider ${name} HTTP ${res.status}`);
+  return res.json();
+}
+
+async function activate(name) {
+  const res = await api(`/api/providers/${encodeURIComponent(name)}/activate`, { method: 'POST' });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`activate ${name} HTTP ${res.status}: ${body.slice(0, 120)}`);
+}
+
+/** Keep the QQ/gaming side-calls on the same currently selected free lane. */
+async function syncAuxiliaryModels(model) {
+  if (!model) return;
+  const targets = new Set([
+    'worlds.qqbot.vision.model',
+    'worlds.qqbot.proactive.model',
+    'worlds.qqbot.emotion.model',
+    'worlds.gaming.watch.model',
+  ]);
+  const res = await api('/api/config');
+  if (!res.ok) throw new Error(`GET /api/config HTTP ${res.status}`);
+  const groups = (await res.json()).groups ?? [];
+  for (const group of groups) {
+    const properties = group?.schema?.properties ?? {};
+    const values = Object.fromEntries(
+      [...targets].filter((key) => Object.hasOwn(properties, key)).map((key) => [key, model]),
+    );
+    if (!Object.keys(values).length) continue;
+    const saved = await api('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ group: group.id, values }),
+    });
+    if (!saved.ok) throw new Error(`更新侧调用模型 HTTP ${saved.status}`);
+    log(`QQ / gaming 侧调用已同步到 ${model}`);
+  }
+}
+
+async function activateFreeProvider(provider) {
+  await activate(provider.name);
+  if (provider.sideModel) {
+    try { await syncAuxiliaryModels(provider.sideModel); }
+    catch (e) { log(`主端点已切换，但侧调用同步失败: ${String(e.message).slice(0, 100)}`); }
+  }
+}
+
+async function provisionFreeProviders() {
+  if (!cfg.provisionMissingFreeProviders) return;
+  for (const candidate of cfg.freeProviders) {
+    if (!candidate.model || !candidate.copyFrom) continue;
+    const exists = await getProvider(candidate.name);
+    if (exists) continue;
+    const source = await getProvider(candidate.copyFrom);
+    if (!source?.entry?.spec) {
+      log(`未创建 ${candidate.name}：复制源 ${candidate.copyFrom} 不存在或未选模型`);
+      continue;
+    }
+    const entry = structuredClone(source.entry);
+    entry.spec.model = candidate.model;
+    const res = await api('/api/providers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: candidate.name,
+        entry,
+        copyFrom: { name: candidate.copyFrom, revision: source.revision },
+      }),
+    });
+    const body = await res.text();
+    if (!res.ok) {
+      log(`创建免费车道 ${candidate.name} 失败 HTTP ${res.status}: ${body.slice(0, 160)}`);
+      continue;
+    }
+    log(`已创建免费车道端点 ${candidate.name} (${candidate.lane}: ${candidate.model})`);
+  }
+}
+
+async function notify(message) {
   if (!cfg.notify.enabled || !cfg.notify.httpUrl || !cfg.notify.toUser) return;
   try {
     await fetch(`${cfg.notify.httpUrl.replace(/\/+$/, '')}/send_private_msg`, {
@@ -179,129 +210,213 @@ async function notify(text) {
         'Content-Type': 'application/json',
         ...(cfg.notify.accessToken ? { Authorization: `Bearer ${cfg.notify.accessToken}` } : {}),
       },
-      body: JSON.stringify({ user_id: cfg.notify.toUser, message: [{ type: 'text', data: { text } }] }),
+      body: JSON.stringify({ user_id: cfg.notify.toUser, message: [{ type: 'text', data: { text: message } }] }),
       signal: AbortSignal.timeout(10000),
     });
-    log('已发出 QQ 通知');
-  } catch (e) {
-    log(`QQ 通知失败: ${String(e.message).slice(0, 80)}`);
+  } catch (e) { log(`QQ 通知失败: ${String(e.message).slice(0, 80)}`); }
+}
+
+function laneStates() {
+  if (!state.lanes || typeof state.lanes !== 'object') state.lanes = {};
+  return state.lanes;
+}
+
+function cooldownFor(status) {
+  if (status === 429) return cfg.rateLimitCooldownMinutes * 60_000;
+  if (status === 401 || status === 403 || status === 404 || (status >= 400 && status < 500))
+    return cfg.hardFailureCooldownMinutes * 60_000;
+  return cfg.transientCooldownMinutes * 60_000;
+}
+
+function failureThreshold(status) {
+  return status === 429 || (status >= 400 && status < 500) ? 1 : cfg.failuresToSwitch;
+}
+
+async function switchAfterFailure(status) {
+  let active;
+  try { active = await getActive(); }
+  catch (e) { log(`读取当前端点失败: ${String(e.message).slice(0, 100)}`); return; }
+  state.current = active;
+  const lanes = laneStates();
+  const current = cfg.freeProviders.find((provider) => provider.name === active);
+  if (!current) return; // Never override a manually selected, unmanaged endpoint.
+
+  const failure = lanes[active] ??= { count: 0, blockedUntil: 0 };
+  failure.count++;
+  failure.lastStatus = status;
+  if (failure.count < failureThreshold(status)) {
+    log(`${current.lane} 端点失败 ${failure.count}/${failureThreshold(status)} (HTTP ${status || 'network'})`);
+    saveState();
+    return;
+  }
+  failure.count = 0;
+  failure.blockedUntil = Date.now() + cooldownFor(status);
+
+  const now = Date.now();
+  const currentIndex = cfg.freeProviders.findIndex((provider) => provider.name === active);
+  const nextFreeCandidates = [
+    ...cfg.freeProviders.slice(currentIndex + 1),
+    ...cfg.freeProviders.slice(0, currentIndex),
+  ].filter((provider) => {
+    const laneState = lanes[provider.name];
+    return !laneState || (laneState.blockedUntil ?? 0) <= now;
+  });
+  for (const nextFree of nextFreeCandidates) {
+    try {
+      await activateFreeProvider(nextFree);
+      state.current = nextFree.name;
+      state.managedCurrent = nextFree.name;
+      state.switchedAt = now;
+      saveState();
+      const message = `免费模型车道 ${current.lane} 遇到 HTTP ${status || '网络错误'}，已切到 ${nextFree.lane}。`;
+      log(message);
+      await notify(message);
+      return;
+    } catch (e) {
+      const failed = lanes[nextFree.name] ??= { count: 0, blockedUntil: 0 };
+      failed.blockedUntil = now + cfg.hardFailureCooldownMinutes * 60_000;
+      log(`切换免费车道 ${nextFree.name} 失败: ${String(e.message).slice(0, 120)}`);
+    }
+  }
+
+  if ((state.paidSwitches ?? 0) >= cfg.maxPaidSwitchesPerDay) {
+    log(`免费车道均不可用；今日付费备用切换已达上限 ${cfg.maxPaidSwitchesPerDay}`);
+    saveState();
+    return;
+  }
+  try {
+    await activate(cfg.paidFallback);
+    state.current = cfg.paidFallback;
+    state.managedCurrent = cfg.paidFallback;
+    state.switchedAt = now;
+    state.paidSwitches = (state.paidSwitches ?? 0) + 1;
+    saveState();
+    const message = `免费车道均遇到故障，已切到付费备用 ${cfg.paidFallback}（今日第 ${state.paidSwitches} 次）。`;
+    log(message);
+    await notify(message);
+  } catch (e) { log(`切换付费备用失败: ${String(e.message).slice(0, 120)}`); }
+}
+
+function errorStatus(record) {
+  const status = Number(record?.data?.status ?? record?.err?.status ?? 0);
+  return Number.isFinite(status) ? status : 0;
+}
+
+async function handleLogLine(line) {
+  let entry;
+  try { entry = JSON.parse(line); } catch { return; }
+  const record = entry.record ?? entry;
+  // The core logs a final event after its own retries. Ignore intermediate
+  // retries so the guard does not race Cortico's built-in retry policy.
+  if (record?.area !== 'core.loop' || record?.msg !== 'LLM调用失败,本轮自然结束') return;
+  const status = errorStatus(record);
+  if (status === 429 || status === 0 || status >= 500 || (status >= 400 && status < 500))
+    await switchAfterFailure(status);
+}
+
+function seedLogCursors() {
+  if (!fs.existsSync(RUNS_DIR)) return;
+  for (const run of fs.readdirSync(RUNS_DIR, { withFileTypes: true })) {
+    if (!run.isDirectory()) continue;
+    const file = path.join(RUNS_DIR, run.name, 'log.jsonl');
+    try { cursors.set(file, { offset: fs.statSync(file).size, carry: '' }); } catch {}
   }
 }
 
-// ---------- 主循环 ----------
-const state = loadState();
-if (state.day !== today()) {
-  state.day = today();
-  state.fallbackSwitches = 0;
+async function pollRunLogs() {
+  if (!fs.existsSync(RUNS_DIR)) return;
+  for (const run of fs.readdirSync(RUNS_DIR, { withFileTypes: true })) {
+    if (!run.isDirectory()) continue;
+    const file = path.join(RUNS_DIR, run.name, 'log.jsonl');
+    let stat;
+    try { stat = fs.statSync(file); } catch { continue; }
+    let cursor = cursors.get(file);
+    if (!cursor) {
+      cursor = { offset: 0, carry: '' };
+      cursors.set(file, cursor);
+    }
+    if (stat.size < cursor.offset) { cursor.offset = 0; cursor.carry = ''; }
+    if (stat.size === cursor.offset) continue;
+    const length = stat.size - cursor.offset;
+    const buffer = Buffer.allocUnsafe(length);
+    const fd = fs.openSync(file, 'r');
+    try { fs.readSync(fd, buffer, 0, length, cursor.offset); }
+    finally { fs.closeSync(fd); }
+    cursor.offset = stat.size;
+    const lines = (cursor.carry + buffer.toString('utf8')).split(/\r?\n/);
+    cursor.carry = lines.pop() ?? '';
+    for (const line of lines) if (line.trim()) await handleLogLine(line);
+  }
 }
 
-log('上游配额守护已启动');
-log(`  首选(免费池): ${cfg.primary}`);
-log(`  备用(渠道网关): ${cfg.fallback}`);
-log(`  探测间隔: ${cfg.probeIntervalSec}s · 连续失败 ${cfg.failuresToSwitch} 次切换`);
-log(`  每日最多切到备用: ${cfg.maxFallbackSwitchesPerDay} 次`);
-log('');
+async function recoverHigherPriorityLane() {
+  const active = state.current;
+  if (state.managedCurrent !== active) return;
+  const foundIndex = cfg.freeProviders.findIndex((provider) => provider.name === active);
+  const currentIndex = active === cfg.paidFallback ? cfg.freeProviders.length : foundIndex;
+  if (currentIndex <= 0 || currentIndex < 0 || Date.now() - (state.switchedAt ?? 0) < cfg.recoverFreeLaneAfterMinutes * 60_000) return;
+  const now = Date.now();
+  const lanes = laneStates();
+  const preferred = cfg.freeProviders.slice(0, currentIndex).find((provider) => {
+    const s = lanes[provider.name];
+    return !s || (s.blockedUntil ?? 0) <= now;
+  });
+  if (!preferred) return;
+  try {
+    await activateFreeProvider(preferred);
+    state.current = preferred.name;
+    state.managedCurrent = preferred.name;
+    state.switchedAt = now;
+    saveState();
+    const message = `免费车道冷却期结束，已恢复优先车道 ${preferred.lane}；后续真实请求会确认可用性。`;
+    log(message);
+    await notify(message);
+  } catch (e) { log(`恢复优先免费车道失败: ${String(e.message).slice(0, 100)}`); }
+}
 
-let stopping = false;
+function resetDailyBudget() {
+  const day = todayShanghai();
+  if (state.day === day) return;
+  state.day = day;
+  state.paidSwitches = 0;
+  saveState();
+  log('上海时区日期变更，已重置付费备用切换计数');
+}
+
 process.on('SIGINT', () => { stopping = true; log('收到停止信号'); process.exit(0); });
 process.on('SIGTERM', () => { stopping = true; process.exit(0); });
 
-// 启动时对齐一次
+log('免费池轮换守护已启动（监听真实生成失败，不发送合成模型探测）');
+log(`免费车道顺序: ${cfg.freeProviders.map((provider) => `${provider.lane}:${provider.name}`).join(' → ')}`);
+log(`付费备用: ${cfg.paidFallback}; 每日最多切入 ${cfg.maxPaidSwitchesPerDay} 次`);
+
 try {
+  await provisionFreeProviders();
   state.current = await getActive();
+  if (state.managedCurrent !== state.current) state.managedCurrent = null;
+  const activeFree = cfg.freeProviders.find((provider) => provider.name === state.current);
+  if (activeFree?.sideModel) {
+    try { await syncAuxiliaryModels(activeFree.sideModel); }
+    catch (e) { log(`启动时侧调用同步失败: ${String(e.message).slice(0, 100)}`); }
+  }
+  if (!state.day) { state.day = todayShanghai(); state.paidSwitches = 0; }
+  seedLogCursors();
+  saveState();
   log(`当前生效端点: ${state.current}`);
 } catch (e) {
-  log(`读不到 Cortico 状态: ${String(e.message).slice(0, 80)}（先继续，稍后重试）`);
+  // Keep watching logs even if Cortico is still starting up.
+  seedLogCursors();
+  log(`启动时连接 Cortico 未就绪: ${String(e.message).slice(0, 100)}（稍后继续）`);
 }
 
-async function tick() {
-  if (stopping) return;
-
-  // 跨天重置计数
-  const d = today();
-  if (state.day !== d) {
-    state.day = d;
-    state.fallbackSwitches = 0;
-    saveState(state);
-    log('跨天，已重置切换计数');
-  }
-
-  let active;
-  try {
-    active = await getActive();
-  } catch (e) {
-    log(`⚠ 连不上 Cortico 控制台: ${String(e.message).slice(0, 80)}`);
-    return;
-  }
-  state.current = active;
-
-  const onPrimary = active === cfg.primary;
-  const onFallback = active === cfg.fallback;
-
-  if (onPrimary || !onFallback) {
-    // 驻留在主池（或一个非我们管理的端点）：探测主池
-    const r = await probe(cfg.primary);
-    if (r.ok) {
-      state.consecutiveFailures = 0;
-      if (!onPrimary) {
-        // 之前的判断是错的，其实可用 → 若是我们切的备用，切回来
-        log(`主池可用（${r.ms}ms），当前在 ${active}`);
-      }
-    } else {
-      state.consecutiveFailures++;
-      log(`主池不可用 [${state.consecutiveFailures}/${cfg.failuresToSwitch}]: ${r.reason}`);
-      if (state.consecutiveFailures >= cfg.failuresToSwitch) {
-        // 需要切换到备用
-        if (state.fallbackSwitches >= cfg.maxFallbackSwitchesPerDay) {
-          log(`⚠ 今日切到备用的次数已达上限(${cfg.maxFallbackSwitchesPerDay})，不再切换`);
-        } else if (!onFallback) {
-          try {
-            await activate(cfg.fallback);
-            state.fallbackSwitches++;
-            state.switchedToFallbackAt = Date.now();
-            state.consecutiveFailures = 0;
-            saveState(state);
-            log(`→ 已切换到备用端点 ${cfg.fallback}（今日第 ${state.fallbackSwitches} 次）`);
-            await notify('免费池限流了，我先换到渠道模型上继续～等你这边缓过来我再切回去');
-          } catch (e) {
-            log(`✗ 切换失败: ${String(e.message).slice(0, 100)}`);
-          }
-        }
-      }
-    }
-  } else if (onFallback) {
-    // 驻留在备用：探测主池是否恢复
-    const stayedMin = (Date.now() - state.switchedToFallbackAt) / 60000;
-    if (stayedMin < cfg.minFallbackStayMinutes) {
-      log(`备用驻留中（${stayedMin.toFixed(1)}/${cfg.minFallbackStayMinutes} 分钟）`);
-    } else {
-      const r = await probe(cfg.primary);
-      if (r.ok) {
-        try {
-          await activate(cfg.primary);
-          state.consecutiveFailures = 0;
-          state.switchedToFallbackAt = 0;
-          saveState(state);
-          log(`← 免费池已恢复（${r.ms}ms），切回 ${cfg.primary}`);
-          await notify('免费池缓过来了，我切回免费模型啦');
-        } catch (e) {
-          log(`✗ 切回失败: ${String(e.message).slice(0, 100)}`);
-        }
-      } else {
-        log(`免费池仍未恢复: ${r.reason}`);
-      }
-    }
-  }
-
-  saveState(state);
-}
-
-// 主循环
 while (!stopping) {
   try {
-    await tick();
-  } catch (e) {
-    log(`tick 异常: ${String(e.message).slice(0, 120)}`);
-  }
-  await new Promise((r) => setTimeout(r, cfg.probeIntervalSec * 1000));
+    resetDailyBudget();
+    const active = await getActive();
+    if (state.current !== active && state.managedCurrent !== active) state.managedCurrent = null;
+    state.current = active;
+    await pollRunLogs();
+    await recoverHigherPriorityLane();
+  } catch (e) { log(`轮询异常: ${String(e.message).slice(0, 120)}`); }
+  await new Promise((resolve) => setTimeout(resolve, cfg.logPollIntervalMs));
 }

@@ -1,6 +1,7 @@
 # ---- 构建产物 / 虚拟环境 ----
 .venv/
 dist/
+dist-fixed/
 build/
 __pycache__/
 *.pyc
