@@ -45,7 +45,7 @@ _FLAGS = CREATE_NO_WINDOW | DETACHED_PROCESS
 # 路径解析：源码运行 vs 打包成 exe
 # --------------------------------------------------------------------------- #
 def _has_chain(d: pathlib.Path) -> bool:
-    """这一层是不是 AI_AGENT_SOTWARE 根（同时有 SnowLuma 和 cortico-qq）。"""
+    """这一层是不是栈根（同时有 SnowLuma 和 cortico-qq）。"""
     try:
         return (d / "cortico-qq").is_dir() and (d / "SnowLuma").is_dir()
     except OSError:
@@ -53,12 +53,12 @@ def _has_chain(d: pathlib.Path) -> bool:
 
 
 def _resolve_base() -> pathlib.Path:
-    """找到 AI_AGENT_SOTWARE 根目录（装有 SnowLuma / cortico-qq 的那层）。
+    """找到栈根目录（装有 SnowLuma / cortico-qq 的那层）。
 
     查找顺序：
       1. launcher.config.json 里的 "base"（显式指定，最优先）
       2. 从源码目录 / exe 所在目录一路往上找同时含 SnowLuma + cortico-qq 的目录
-         （打包后 exe 在 <base>\\AI启动器\\，往上两层就是 <base>）
+         （打包后 exe 在 <pkg>\\launcher\\dist\\AI启动器\\ 里，往上找同样能命中）
     """
     for cand_cfg in (ROOT / "launcher.config.json", ROOT.parent / "launcher.config.json"):
         if cand_cfg.is_file():
@@ -69,7 +69,7 @@ def _resolve_base() -> pathlib.Path:
             except Exception:
                 pass
 
-    # 源码运行：ROOT 就是 <base>\launcher-app
+    # 源码运行：ROOT 就是 <pkg>\launcher
     if _has_chain(ROOT.parent):
         return ROOT.parent
 
@@ -84,13 +84,28 @@ def _resolve_base() -> pathlib.Path:
     return ROOT.parent
 
 
+def _find_pkg() -> pathlib.Path:
+    """找到 persona-stack 仓库根（含 guard/upstream-guard.mjs 的那层）。
+
+    源码运行时 ROOT 就是 <pkg>\\launcher；打包运行时 exe 在
+    <pkg>\\launcher\\dist\\AI启动器\\ 里，往上找同样能命中。
+    """
+    for cand in [ROOT, *ROOT.parents]:
+        if (cand / "guard" / "upstream-guard.mjs").is_file():
+            return cand
+    return ROOT.parent
+
+
 BASE = _resolve_base()
+PKG = _find_pkg()
 SNOW = BASE / "SnowLuma"
 CORTICO = BASE / "cortico-qq"
 RUNS = CORTICO / "deployments" / DEPLOY / "data" / "runs"
 DEPLOY_ENV = CORTICO / "deployments" / DEPLOY / ".env"
-GUARD_CFG = BASE / "upstream-guard.json"
-GUARD_STATE = BASE / "upstream-guard-state.json"
+GUARD_DIR = PKG / "guard"
+GUARD_SCRIPT = GUARD_DIR / "upstream-guard.mjs"
+GUARD_CFG = GUARD_DIR / "upstream-guard.json"
+GUARD_STATE = GUARD_DIR / "upstream-guard-state.json"
 
 
 # --------------------------------------------------------------------------- #
@@ -510,7 +525,7 @@ class Api:
             else:
                 try:
                     subprocess.Popen(
-                        [node, "upstream-guard.mjs"], cwd=str(BASE),
+                        [node, str(GUARD_SCRIPT)], cwd=str(GUARD_DIR),
                         creationflags=_FLAGS, close_fds=True,
                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,

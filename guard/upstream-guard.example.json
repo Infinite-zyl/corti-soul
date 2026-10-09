@@ -1,0 +1,23 @@
+{
+  "_comment": "复制为 upstream-guard.json 后按需修改。真实文件含本地 QQ 号与 OneBot token，已被 .gitignore 排除。",
+
+  "corticoUrl": "http://127.0.0.1:7788",
+
+  "primary": "DSH_free_mimo-v26-flash",
+  "fallback": "DSH_free_deepseek-v41-flash",
+
+  "probeIntervalSec": 60,
+  "failuresToSwitch": 2,
+  "probeTimeoutMs": 20000,
+  "probeMaxTokens": 8,
+
+  "minFallbackStayMinutes": 5,
+  "maxFallbackSwitchesPerDay": 12,
+
+  "notify": {
+    "enabled": false,
+    "httpUrl": "http://127.0.0.1:3005",
+    "accessToken": "",
+    "toUser": ""
+  }
+}

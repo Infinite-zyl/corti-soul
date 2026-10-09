@@ -70,11 +70,11 @@ Cortico **没有**原生的模型 fallback：`activeProvider` 是单值，`loop.
 | `NOTIFY_QQ` | 通知发给哪个 QQ 号 | 同上 |
 | `CORTICO_ROOT` | Cortico 检出路径 | 默认取本仓库的兄弟目录 `../cortico-qq` |
 | `STACK_ROOT` | 栈根（放 SnowLuma 等组件的目录） | `start-ai.ps1` 默认上溯两级 |
-| `GUARD_CONFIG` | 守护配置文件路径 | 默认 `./upstream-guard.json` |
-| `GUARD_STATE` | 守护状态文件路径 | 默认 `./upstream-guard-state.json` |
+| `GUARD_CONFIG` | 守护配置文件路径 | 默认 `guard/upstream-guard.json` |
+| `GUARD_STATE` | 守护状态文件路径 | 默认 `guard/upstream-guard-state.json` |
 | `DEPLOY_NAME` | Cortico 部署实例名 | 默认 `mybot` |
 
-> 注意：`upstream-guard.json` 由守护进程首次运行时按 `DEFAULTS` 自动生成。**首次运行前请先设好上面的环境变量**，否则生成的文件里 `accessToken` / `toUser` 是空的（可以事后手填）。
+> 注意：真实的 `guard/upstream-guard.json` 含本地 QQ 号与 OneBot token，**已被 `.gitignore` 排除**。想手写就照 `guard/upstream-guard.example.json` 复制一份；若文件不存在，守护进程会按 `DEFAULTS` 自动生成，但这种情况下 `notify.accessToken` / `notify.toUser` 取自上面的环境变量，不设就是空的（通知跳过，不影响切换）。
 
 ---
 
@@ -84,18 +84,23 @@ Cortico **没有**原生的模型 fallback：`activeProvider` 是单值，`loop.
 
 ```
 <栈根>/
-├─ SnowLuma/
-├─ cortico-qq/          # Cortico 检出（需自行 clone + pnpm install）
-├─ persona-stack/       # ← 本仓库
-│   ├─ patches/         # 5 个补丁脚本（幂等，可重复运行）
-│   ├─ guard/           # 上游配额守护
-│   ├─ launcher/        # 桌面启动器（Python + pywebview）
-│   └─ scripts/         # start-ai.ps1
-├─ AI启动器/            # 启动器打包产物（不入库）
-└─ 启动AI.bat
+├─ SnowLuma/                    # 第三方，自行安装
+├─ cortico-qq/                  # Cortico 检出（需自行 clone + pnpm install）
+├─ persona-stack/               # ← 本仓库
+│   ├─ patches/                 # 5 个补丁脚本（幂等，可重复运行）
+│   ├─ guard/                   # 上游配额守护 + 它的配置/状态文件
+│   ├─ launcher/                # 桌面启动器源码与构建工作区
+│   │   ├─ app.py coreclr_env.py AI启动器.spec brand/ ui/
+│   │   └─ dist/AI启动器/       # 打包产物（不入库）
+│   ├─ scripts/                 # start-ai.ps1
+│   ├─ tools/                   # 建仓/推送等一次性工具（token 不入库）
+│   └─ legacy/                  # 被取代的旧实现（C# 启动器、未脱敏原版脚本；不入库）
+└─ 启动AI.bat                   # 双击入口
 ```
 
 布局不是这个形状就往 `CORTICO_ROOT` / `STACK_ROOT` 里写实际路径。
+
+> `cortico-qq/node_modules` 里大量 `.pnpm` 条目是**绝对路径符号链接**（本机实测 4.6 万个）。所以它必须待在原地；要整体搬家得先删 `node_modules` 再 `pnpm install`。
 
 ---
 
@@ -121,7 +126,7 @@ node patches/patch-qqbot-bugs2.mjs   # 依赖前一个的产物，顺序别换
 node guard/upstream-guard.mjs
 ```
 
-首次运行会在仓库根生成 `upstream-guard.json`。里面的 `primary` / `fallback` 填你**自己** Cortico 里的端点名。
+首次运行会在 `guard/` 下生成 `upstream-guard.json`。里面的 `primary` / `fallback` 填你**自己** Cortico 里的端点名。
 
 ### 起启动器
 
@@ -129,11 +134,13 @@ node guard/upstream-guard.mjs
 cd launcher
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install pywebview pyinstaller pillow
-.\.venv\Scripts\python.exe app.py                 # 开发
-.\.venv\Scripts\pyinstaller.exe --noconfirm --clean AI启动器.spec   # 打包
+.\.venv\Scripts\python.exe app.py                     # 开发
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean AI启动器.spec   # 打包
 ```
 
-产物在 `launcher\dist\AI启动器\`。
+产物在 `launcher\dist\AI启动器\`，双击其中的 `AI启动器.exe` 即可（托盘常驻，关窗不退出）。
+
+> 用 `python -m PyInstaller` 而不是 `.venv\Scripts\pyinstaller.exe`：本机实测后者会以 exit 1 静默失败，前者正常。
 
 > `pywebview` 需要构建期补丁才能在 CoreCLR 上工作，见 `launcher/README.md`。
 
@@ -143,7 +150,7 @@ python -m venv .venv
 
 - **`patch-gaming-capture` 抓的是屏幕像素**，游戏必须在前台可见；被遮挡时抓到的是遮挡物。这是 `PrintWindow` 对 DirectX 窗口失效后的权宜之计。
 - **改人格是改 `CONSTITUTION.md`**，不是改本仓库。人格由 Cortico 的 bot 包提供，每次会话启动时加载。
-- **守护配置在启动时一次读入**，改了 `upstream-guard.json` 要重启守护。
+- **守护配置在启动时一次读入**，改了 `guard/upstream-guard.json` 要重启守护。
 - 各脚本里的**中文注释**和 `.ps1` 的 **UTF-8 BOM** 是有意保留的：Windows PowerShell 5.1 在无 BOM 时按 GBK 解析，会报 `Unexpected token '}'`。
 
 ## 许可

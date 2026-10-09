@@ -20,10 +20,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 // ---------- 配置 ----------
-// 本仓库根目录（放 upstream-guard.json / 状态文件）。
-const REPO_ROOT = path.resolve(import.meta.dirname, '..');
+// 本脚本所在目录（放 upstream-guard.json / 状态文件），以及仓库根、cortico-qq。
+const GUARD_DIR = import.meta.dirname;
+const REPO_ROOT = path.resolve(GUARD_DIR, '..');
 const CORTICO = process.env.CORTICO_ROOT ?? path.join(REPO_ROOT, '..', 'cortico-qq');
-const CFG_PATH = process.env.GUARD_CONFIG ?? path.join(REPO_ROOT, 'upstream-guard.json');
+const CFG_PATH = process.env.GUARD_CONFIG ?? path.join(GUARD_DIR, 'upstream-guard.json');
 
 const DEFAULTS = {
   /** Cortico 控制台地址。 */
@@ -53,7 +54,7 @@ const DEFAULTS = {
     toUser: process.env.NOTIFY_QQ ?? '',
   },
   /** 状态文件（记录当日切换次数）。 */
-  statePath: process.env.GUARD_STATE ?? path.join(REPO_ROOT, 'upstream-guard-state.json'),
+  statePath: process.env.GUARD_STATE ?? path.join(GUARD_DIR, 'upstream-guard-state.json'),
 };
 
 function loadConfig() {
