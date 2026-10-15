@@ -28,7 +28,7 @@ export function installHomeDigGuard(bot: DigBot, denied: (at: Point)=>boolean): 
   const original = bot.dig;
   bot.dig = function(block, ...args) {
     const p=block.position;
-    if (denied([p.x,p.y,p.z])) return Promise.reject(new Error('住宅保护：这里是家的保护范围，不允许采集或挖墙通行，请走门、绕路或去外部资源区。'));
+    if (denied([p.x,p.y,p.z])) return Promise.reject(new Error('住宅保护/建筑保护：这里是已登记的保护范围，不允许采集或挖掘通行，请走门、绕路或去外部资源区。'));
     return original.call(this,block,...args);
   };
 }
