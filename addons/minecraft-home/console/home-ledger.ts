@@ -15,6 +15,8 @@ export const homeLedgerPanel:ConsolePanel={
     const msg=ui.msgline(),body=ui.h('div'),actions=ui.actions();
     const radius=ui.input({type:'number',value:'12'});radius.min='1';radius.max='64';
     const name=ui.input({placeholder:'例如：自动农田'});
+    const owner=ui.select({options:[{value:'user',label:'用户设施'},{value:'shared',label:'共享设施'},{value:'self',label:'她自建的设施'}],value:'user'});
+    const purpose=ui.input({value:'仅保护结构，未委托经营'});purpose.maxLength=160;
     const refresh=ui.button('刷新登记',{onClick:()=>void run(load)});
     const survey=ui.button('调查附近设施',{onClick:()=>void run(showSurvey)});
     actions.append(refresh,survey,msg);
@@ -27,7 +29,7 @@ export const homeLedgerPanel:ConsolePanel={
     const register=ui.button('登记当前位置的建筑',{variant:'primary',onClick:()=>void run(async()=>{
       if(!name.value.trim())throw Error('请填写建筑名称');
       const s=await readSurvey();await saveBox('building-save',name.value.trim(),s.center,s.dimension,s.centerSource);
-    })});card.body.append(register);
+    })});card.body.append(ui.field('建筑归属',owner),ui.field('用途与授权',purpose),register);
     const nearby=ui.h('div');card.body.append(nearby);
     let state:State|null=null,busy=false;
     const buttons=[refresh,survey,protect,register];
@@ -51,8 +53,8 @@ export const homeLedgerPanel:ConsolePanel={
       if(!Number.isInteger(r)||r<1||r>64)throw Error('半径需为1至64格的整数');
       const protection={min:[center[0]-r,center[1]-4,center[2]-r] as Point,max:[center[0]+r,center[1]+16,center[2]+r] as Point};
       const replace=action==='building-save'&&state?.buildings.some(b=>b.name===label&&b.dimension===dimension);
-      if(!await ui.confirm({title:`${replace?'更新':'保存'}「${label}」的保护范围`,body:`${source?'调查中心：'+source+'；':''}中心 (${coords(center)})\n范围：${range(protection)}\n范围内禁止挖掘，包括作物。确认覆盖所有需要保护的结构。`}))return;
-      await change({action,name:label,protection,replace:!!replace,confirmation:`控制台用户确认：${label} ${range(protection)}`});
+      if(!await ui.confirm({title:`${replace?'更新':'保存'}「${label}」的保护范围`,body:`${source?'调查中心：'+source+'；':''}中心 (${coords(center)})\n范围：${range(protection)}\n${action==='building-save'?'归属：'+owner.value+'；用途与授权：'+purpose.value+'\n':''}范围内禁止挖掘，包括作物。确认覆盖所有需要保护的结构。`}))return;
+      await change({action,name:label,protection,replace:!!replace,...(action==='building-save'?{owner:owner.value,purpose:purpose.value}:{}),confirmation:`控制台用户确认：${label} ${range(protection)}`});
     }
     async function load(){
       const next=await ctx.invoke<State>('state',[]);if(ctx.signal.aborted)return;state=next;
@@ -69,7 +71,7 @@ export const homeLedgerPanel:ConsolePanel={
       for(const b of next.buildings){
         const row=ui.actions();const remove=ui.button('撤销保护',{variant:'danger',size:'sm',onClick:()=>void run(async()=>{
           if(await ui.confirm({title:`撤销「${b.name}」保护？`,body:`${b.dimension}；${range(b.protection)}\n只删除登记，不拆除建筑。`,danger:true}))await change({action:'building-remove',name:b.name,dimension:b.dimension,confirmation:'控制台用户确认撤销 '+b.name});
-        })});row.append(ui.h('span','',`${b.name} · ${b.dimension} · ${range(b.protection)}`),remove);body.append(row);
+        })});row.append(ui.h('span','',`${b.name} · ${b.owner==='user'?'用户设施':b.owner==='self'?'自建设施':'共享设施'} · ${b.purpose} · ${b.dimension} · ${range(b.protection)}`),remove);body.append(row);
       }
     }
     async function showSurvey(){

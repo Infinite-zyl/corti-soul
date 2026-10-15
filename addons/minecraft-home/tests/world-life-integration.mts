@@ -25,6 +25,16 @@ try{
   const world=new MinecraftWorld({cfg,dataDir:dir});world.bridge={connected:true,bot};world.executor=ex;
   assert.equal(world.homeProtectedCell(3,65,3),true);assert.equal(world.homeProtectedCell(30,64,30),false);
   world.nightRestTick();assert.equal(ex.task.nightRest,true);assert.deepEqual(ex.task.steps.at(-1).at,[1,64,2]);
+  const restTask=ex.task;
+  assert.match(await world.doEscape(),/传送未执行/);assert.equal(ex.task,restTask);
+  const merged=world.enqueueTool('mc_do',{steps:[{skill:'goto',at:[0,64,0]},{skill:'use',at:[1,64,2]}]},(steps:unknown)=>({steps}));
+  assert.match(merged,/休息请求已合并/);assert.equal(ex.task,restTask);
+  assert.match(world.enqueueTool('mc_do',{steps:[{skill:'collect',block:'wheat',count:1}]},(steps:unknown)=>({steps})),/没有接单/);
+  const projectTool=world.tools().find((t:{name:string})=>t.name==='mc_project');assert.ok(projectTool);
+  const saved=await projectTool.handler({action:'save',name:'自建食物来源',stage:'选址',next:'调查保护区外水源',status:'active',evidence:'尚未开工'});
+  assert.match(String(saved),/选址/);
+  const rebuilt=new MinecraftWorld({cfg,dataDir:dir});
+  assert.equal(rebuilt.projectBook.get('weak:'+cfg.host+':'+cfg.port+'|').name,'自建食物来源');
   assert.match(ex.submit([{skill:'goto',at:[30,64,30]}],'now'),/没有接单/);
   const state=JSON.parse(world.homeTool({}));assert.equal(state.nightRest.active,true);assert.ok(state.protection);
   bot.time.timeOfDay=0;world.nightRestTick();assert.equal(ex.task,null);

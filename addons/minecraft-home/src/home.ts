@@ -21,6 +21,7 @@ export interface HomeRecord {
 }
 export interface BuildingRecord {
   name: string; dimension: string; protection: { min: Point; max: Point };
+  owner:'user'|'shared'|'self'; purpose:string;
   confirmation: string; updatedAt: string;
 }
 interface HomeFile { version: 1; homes: Record<string, HomeRecord>; buildings: Record<string, BuildingRecord[]> }
@@ -36,7 +37,9 @@ function validateBox(raw:unknown): {min:Point;max:Point} {
 }
 function validateBuilding(raw:unknown):BuildingRecord {
   const b=object(raw);
+  const owner=b.owner??'user';if(!['user','shared','self'].includes(String(owner)))throw new Error('未知建筑归属');
   return {name:text(b.name,'建筑名称',80),dimension:text(b.dimension,'维度',80),protection:validateBox(b.protection),
+    owner:owner as BuildingRecord['owner'],purpose:b.purpose===undefined?'仅保护结构，未委托经营':text(b.purpose,'用途与授权',160),
     confirmation:text(b.confirmation,'用户确认说明',500),updatedAt:text(b.updatedAt,'更新时间',80)};
 }
 /** 主进程只读既有存档标记；不创建身份或修改服务器配置。 */
@@ -154,7 +157,8 @@ export class HomeBook {
     const a=object(input),d=this.load();const items=d.buildings[realm]??[];
     const usePlayer=observer.playerPosition&&Math.hypot(...observer.playerPosition.map((n,i)=>n-observer.position[i]!))<=32;
     const center=usePlayer?observer.playerPosition!:observer.position;
-    const b=validateBuilding({name:a.name,dimension:observer.dimension,confirmation:a.confirmation,
+    const previous=items.find(x=>x.name===a.name&&x.dimension===observer.dimension);
+    const b=validateBuilding({name:a.name,dimension:observer.dimension,confirmation:a.confirmation,owner:a.owner??previous?.owner,purpose:a.purpose??previous?.purpose,
       protection:a.protection??radiusBox(center,a.radius),updatedAt:new Date().toISOString()});
     if(!center.every((n,i)=>n>=b.protection.min[i]!&&n<=b.protection.max[i]!))throw new Error('现场中心必须在登记范围内，请走近建筑');
     const index=items.findIndex(x=>x.name===b.name&&x.dimension===b.dimension);
@@ -194,7 +198,7 @@ export class HomeBook {
       if (!home) return '[家] 尚未登记；现场认家用mc_home，不从重生点猜家或床的归属。'+(this.buildings(realm).length?'已有受保护建筑：'+this.buildings(realm).map(b=>b.name).join('、')+'；mc_home ledger查边界。':'');
       const bed = home.facilities.find((f) => f.role === 'own-bed')!;
       const stations=home.facilities.filter(f=>['workbench','furnace'].includes(f.role)).map(f=>`${f.kind}(${key(f.at)})`).join('、');
-      const buildings=this.buildings(realm).slice(0,8).map(b=>`${b.name}[${b.dimension}](${key(b.protection.min)})至(${key(b.protection.max)})`).join('；');
+      const buildings=this.buildings(realm).slice(0,4).map(b=>`${b.name}[${b.owner==='user'?'用户设施，不是你的待办':b.owner==='shared'?'共享设施':'自建设施'}；${b.purpose.slice(0,40)}；${b.dimension}](${key(b.protection.min)})至(${key(b.protection.max)})`).join('；');
       return `[家·历史登记] ${home.name}，${home.dimension}，返回(${key(home.returnAt)})；自己的床(${key(bed.at)})，设施${home.facilities.length}项。现成工作设施：${stations||'尚未登记，先survey查找'}。${buildings?'建筑保护：'+buildings+'。':''}先复用现成设施，不重复合成/摆放；远处登记需走近核验。当前存在/占用情况需mc_home核验；个人约定仍由你写进自己的笔记。`;
     } catch (error) { return `[家] ${error instanceof Error ? error.message : String(error)}`; }
   }
@@ -272,6 +276,8 @@ export const MINECRAFT_HOME_TOOL = {
     action: { type: 'string', enum: ['query', 'survey', 'save', 'remove', 'protect','ledger','building-save','building-remove','facilities'], description: 'ledger查询家与建筑账本。protect确认家周边保护范围：radius以家返回位置为中心，或指定protection精确框。building-save登记用户现场指认的农田等建筑；radius以附近Infinite或自己为中心，水平半径、下4上16格，也可精确框。所有范围先与用户确认，不猜房屋边界，整个范围禁止挖掘（包括作物）；只操作门、炉子等不受影响。building-remove需名称和dimension。facilities补充用户确认的共享箱、工作台/炉子，不修改床；先survey。不得为采集或寻路擅自撤销保护。' },
     radius:{type:'integer',minimum:1,maximum:64},
     dimension:{type:'string',maxLength:80},
+    owner:{type:'string',enum:['user','shared','self'],description:'建筑归属，旧登记默认user；用户设施未委托经营时不产生你的采集、维修或管理任务。'},
+    purpose:{type:'string',maxLength:160,description:'用途及用户授权的使用方式。'},
     protection: { type: 'object', properties: {
       min: { type: 'array', items: { type: 'integer' }, minItems: 3, maxItems: 3 },
       max: { type: 'array', items: { type: 'integer' }, minItems: 3, maxItems: 3 },
