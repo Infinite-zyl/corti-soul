@@ -17,6 +17,7 @@ export interface HomeFacility { at: Point; role: HomeRole; kind: string }
 export interface HomeRecord {
   name: string; dimension: string; returnAt: Point; facilities: HomeFacility[];
   confirmation: string; updatedAt: string;
+  protection?: { min: Point; max: Point };
 }
 interface HomeFile { version: 1; homes: Record<string, HomeRecord> }
 /** 主进程只读既有存档标记；不创建身份或修改服务器配置。 */
@@ -91,7 +92,14 @@ function validateHome(value: unknown): HomeRecord {
   });
   if (facilities.filter((f) => f.role === 'own-bed').length !== 1) throw new Error('必须明确登记一张自己的床');
   if (facilities.filter((f) => f.role === 'user-bed').length > 1) throw new Error('用户床最多登记一张');
-  return { name, dimension, returnAt, facilities,
+  let protection: HomeRecord['protection'];
+  if (home.protection !== undefined) {
+    const box=object(home.protection); const min=point(box.min);const max=point(box.max);
+    if(min.some((v,i)=>v>max[i]! || max[i]!-v>128))throw new Error('保护边界每轴需有序且跨度不超过128格');
+    if(facilities.some(f=>f.at.some((v,i)=>v<min[i]!||v>max[i]!)))throw new Error('保护边界必须包含所有登记设施');
+    protection={min,max};
+  }
+  return { name, dimension, returnAt, facilities, ...(protection?{protection}:{}),
     confirmation: text(home.confirmation, '用户确认说明', 500), updatedAt: text(home.updatedAt, '更新时间', 80) };
 }
 
@@ -177,7 +185,7 @@ export class HomeBook {
     });
     const returnAt = args.returnAt === undefined ? observer.position : point(args.returnAt);
     if (Math.hypot(...returnAt.map((n, i) => n - observer.position[i]!)) > 32) throw new Error('返回位置超出现场32格');
-    const home = validateHome({ name: args.name, dimension: observer.dimension, returnAt, facilities,
+    const home = validateHome({ name: args.name, dimension: observer.dimension, returnAt, facilities, protection: args.protection ?? old?.protection,
       confirmation: args.confirmation, updatedAt: new Date().toISOString() });
     data.homes[realm] = home; this.commit(data); return home;
   }
@@ -185,13 +193,22 @@ export class HomeBook {
     text(confirmation, '用户确认说明', 500);
     const data = this.load(); delete data.homes[realm]; this.commit(data);
   }
+  protect(realm:string, bounds:unknown, confirmation:unknown):void {
+    text(confirmation,'用户确认说明',500);const data=this.load();const home=data.homes[realm];
+    if(!home)throw new Error('先登记家，再调整保护边界');
+    data.homes[realm]=validateHome({...home,protection:bounds,confirmation,updatedAt:new Date().toISOString()});this.commit(data);
+  }
 }
 
 export const MINECRAFT_HOME_TOOL = {
   name: 'mc_home', tags: ['write'] as const,
   description: 'Persistent home and facility records for the current save. With no fields query the registered home and current loaded facility states. action:survey reads loaded blocks within 16 blocks of nearby Infinite (within32), otherwise yourself; candidates do not imply ownership. Ask the user which bed is yours, which bed is theirs and which storage is shared. Only save/update/remove after explicit user confirmation, quote that confirmation. Do not infer home from spawn. Updates require replace:true and a complete facility list. Save records external facts, not personal memory; write personal agreements using your own memory tools. Use exact registered coordinates with existing mc_do use/goto when needed; this tool never moves or sleeps.',
   parameters: { type: 'object', properties: {
-    action: { type: 'string', enum: ['query', 'survey', 'save', 'remove'] },
+    action: { type: 'string', enum: ['query', 'survey', 'save', 'remove', 'protect'], description: 'protect只在用户确认后设置家的min/max保护边界，必须包含已登记设施；不能为采集或寻路绕过保护。query还返回保护范围和夜间回家睡床状态。' },
+    protection: { type: 'object', properties: {
+      min: { type: 'array', items: { type: 'integer' }, minItems: 3, maxItems: 3 },
+      max: { type: 'array', items: { type: 'integer' }, minItems: 3, maxItems: 3 },
+    }, required: ['min','max'], additionalProperties: false },
     name: { type: 'string', maxLength: 80 },
     confirmation: { type: 'string', maxLength: 500, description: 'The explicit user confirmation of this registration, update or removal; never invent it.' },
     replace: { type: 'boolean' },

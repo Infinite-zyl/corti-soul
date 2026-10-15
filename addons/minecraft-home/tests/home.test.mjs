@@ -89,3 +89,13 @@ withFixture('撤销只删登记，不改床或其他存档', (f) => {
 test('未配置持久数据目录时不冒充保存成功', () => {
   const f=fixture();try{assert.throws(()=>new HomeBook(null).save('a',f.input,f.observer), /数据目录/);}finally{rmSync(f.dir,{recursive:true,force:true});}
 });
+withFixture('保护边界跨重启保留，非法或排除设施的更新不覆盖旧数据', (f)=>{
+  f.book.save('a',f.input,f.observer);
+  const box={min:[0,63,0],max:[9,70,9]};
+  f.book.protect('a',box,'用户确认精确边界');
+  assert.deepEqual(new HomeBook(f.file).get('a').protection,box);
+  const before=readFileSync(f.file,'utf8');
+  assert.throws(()=>f.book.protect('a',{min:[0,63,0],max:[2,70,2]},'确认'),/包含所有/);
+  assert.throws(()=>f.book.protect('a',{min:[0,63,0],max:[200,70,9]},'确认'),/跨度/);
+  assert.equal(readFileSync(f.file,'utf8'),before);
+});
