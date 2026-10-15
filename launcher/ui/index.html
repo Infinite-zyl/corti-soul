@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="color-scheme" content="dark">
 <title>corti-soul 启动器</title>
+<link rel="stylesheet" href="games.css">
 <style>
   :root{
     --light:#B975F9; --base:#A855F7; --accent:#EC4899;
@@ -295,7 +296,7 @@
         <div class="grow"></div>
         <div class="chips" id="p-chips"></div>
       </div>
-      <div>
+      <div id="model-settings">
         <div class="model-routing">
           <label>切换方式<select id="model-mode"><option value="auto">自动切换</option><option value="manual">手动固定</option></select></label>
           <label>主模型端点<select id="model-choice" disabled><option value="">先刷新模型列表</option></select></label>
@@ -305,21 +306,30 @@
         <div class="model-mode-note" id="model-note" role="status" aria-live="polite">自动：沿用现有故障切换。手动：固定主模型，限流只报错，不自动换线路。</div>
       </div>
 
-      <div>
+      <div id="stack-status">
         <div class="sect" style="margin-bottom:9px">装配状态</div>
         <div class="grid" id="services"></div>
       </div>
 
-      <div>
+      <div id="activity-tabs">
         <div class="tabs">
           <button class="on" data-tab="act">最近活动</button>
           <button data-tab="log">运行日志</button>
+          <button data-tab="games">游戏</button>
           <span class="grow"></span>
           <span class="when" id="stamp"></span>
         </div>
       </div>
       <div class="stream" id="act"><div class="empty">正在读取 …</div></div>
       <div class="stream" id="log" style="display:none"><div class="empty">—</div></div>
+      <section id="games" class="game-panel" style="display:none" aria-label="游戏与手机观看">
+        <div class="game-heading"><div><h2>Minecraft</h2><p>先开启服务器，再选择观察或一起玩。</p></div><button id="game-settings" class="game-link" type="button">配置与更多操作</button></div>
+        <div id="game-rows"></div>
+        <div class="game-view-heading"><h3>手机观看</h3><span>同一 Wi-Fi · 默认静音</span></div>
+        <div id="viewer-row"></div>
+        <p id="game-notice" role="status" aria-live="polite">正在读取游戏状态…</p>
+        <div class="game-reserved"><span>饥荒联机版</span><span>预留接入</span></div>
+      </section>
 
       <div class="hint" id="hint">「⤓」收进托盘并保持服务运行；「✕」退出启动器并停止 SnowLuma、OneBot WS、Cortico 和免费池守护。</div>
     </main>
@@ -334,6 +344,7 @@
 <div class="resize-handle se" data-edge="se"></div>
 <div class="resize-handle sw" data-edge="sw"></div>
 
+<script src="games.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const CIRC = 2 * Math.PI * 56;
@@ -544,9 +555,12 @@ async function refresh() {
 }
 
 function tabTo(name) {
+  document.querySelector('main').classList.toggle('games-view',name === 'games');
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
   $('act').style.display = name === 'act' ? '' : 'none';
   $('log').style.display = name === 'log' ? '' : 'none';
+  $('games').style.display = name === 'games' ? '' : 'none';
+  if(name === 'games') window.GamePanel?.refresh();
 }
 
 function bindResizeHandles() {
@@ -615,6 +629,7 @@ async function boot() {
 
   document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => tabTo(b.dataset.tab));
   bindResizeHandles();
+  window.GamePanel?.init();
   $('b-start').onclick = async () => {
     $('b-start').disabled = true;
     $('b-start').textContent = '启动中 …';

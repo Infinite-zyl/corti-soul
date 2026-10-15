@@ -15,7 +15,7 @@ AUTH='Basic '+base64.b64encode(('viewer:'+PASSWORD).encode()).decode()
 
 class GatewayTests(unittest.TestCase):
     def setUp(self):
-        self.state=SimpleNamespace(secret={'password':PASSWORD,'control':'private-control-token'},state='waiting',stream_ready=False,sessions=set(),ip='192.168.1.2',quit=threading.Event())
+        self.state=SimpleNamespace(secret={'password':PASSWORD,'control':'private-control-token'},remote_stop='remote-stop-token',state='waiting',stream_ready=False,sessions=set(),ip='192.168.1.2',quit=threading.Event())
         self.server=ThreadingHTTPServer(('127.0.0.1',0),viewer.handler(self.state,False))
         self.local=ThreadingHTTPServer(('127.0.0.1',0),viewer.handler(self.state,True))
         for server in (self.server,self.local): threading.Thread(target=server.serve_forever,daemon=True).start()
@@ -45,12 +45,27 @@ class GatewayTests(unittest.TestCase):
     def test_local_stop_requires_control_token(self):
         self.assertEqual(self.request('/stop','POST',local=True)[0],403)
         self.assertEqual(self.request('/stop','POST',local=True,headers={'X-Control-Token':'private-control-token'})[0],200)
-        self.assertTrue(self.state.quit.is_set())
+        self.assertTrue(self.state.quit.wait(timeout=1))
     def test_unknown_sessions_are_not_proxied(self):
         self.assertEqual(self.request('/corti/whep/unknown','DELETE')[0],404)
     def test_local_info_and_qr(self):
         self.assertIn(PASSWORD.encode(),self.request(local=True)[2])
         self.assertEqual(self.request('/qr.svg',local=True)[0],200)
+    def test_remote_stop_requires_login_origin_and_fresh_token(self):
+        path='/watch/stop'
+        self.assertEqual(self.request(path,'POST',auth=None)[0],401)
+        self.assertEqual(self.request(path,'POST')[0],403)
+        self.assertEqual(self.request(path,'POST',headers={'Origin':'http://other.test','X-Viewer-Stop':'remote-stop-token'})[0],403)
+        self.assertFalse(self.state.quit.is_set())
+        headers={'Origin':'http://192.168.1.2:7898','X-Viewer-Stop':'remote-stop-token'}
+        self.assertEqual(self.request(path,'POST',headers=headers)[0],200)
+        self.assertTrue(self.state.quit.wait(timeout=1))
+    def test_local_status_does_not_expose_remote_stop_token(self):
+        self.assertNotIn('stopToken',json.loads(self.request('/status',local=True)[2]))
+        self.assertEqual(json.loads(self.request('/status')[2])['stopToken'],'remote-stop-token')
+    def test_stop_control_asset_is_authenticated(self):
+        self.assertEqual(self.request('/watch-controls.js',auth=None)[0],401)
+        self.assertEqual(self.request('/watch-controls.js')[0],200)
 
 class ConfigTests(unittest.TestCase):
     def test_local_only_publisher_read_only_viewer_no_public_control(self):

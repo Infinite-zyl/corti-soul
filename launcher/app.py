@@ -21,6 +21,8 @@ import time
 import urllib.request
 import webbrowser
 from model_routing import ModelRouting
+from game_controls import GameControls
+from ui_assets import load_ui
 
 import coreclr_env  # noqa: F401  — 必须在 import webview 之前导入
 import webview
@@ -405,6 +407,7 @@ class Api:
         self._model_routing = ModelRouting(GUARD_DIR / 'routing-mode.json', CONSOLE_URL,
                                            lambda: self.stop_service('guard'), lambda: self.start_service('guard'))
         self._log("启动器就绪。")
+        self._games = GameControls(PKG, CONSOLE_URL, self._log)
 
     # ---- 基础设施 ---------------------------------------------------------- #
     def attach(self, window) -> None:
@@ -518,6 +521,7 @@ class Api:
 
     def _stop_stack_services(self) -> None:
         """Stop the four chain services the launcher owns on explicit exit."""
+        self._games.close()
         with self._process_lock:
             if self._shutdown_done:
                 return
@@ -730,6 +734,18 @@ class Api:
         result = self._model_routing.apply(mode, provider)
         self._log(result['msg'])
         return result
+
+    def get_games_status(self) -> dict:
+        return self._games.snapshot()
+
+    def game_action(self, game: str, lane: str, action: str) -> dict:
+        return self._games.action(game, lane, action)
+
+    def open_mobile_viewer(self) -> dict:
+        return self._games.open_viewer()
+
+    def open_game_settings(self, game: str) -> dict:
+        return self._games.open_settings(game)
 
     def get_status(self) -> dict:
         svcs = probe_all()
@@ -953,7 +969,7 @@ def main() -> None:
     webview.settings["DRAG_REGION_SELECTOR"] = ".titlebar, .titlebar .grow, .titlebar b, .titlebar .tag, .titlebar .orb"
     webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
 
-    html = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
+    html = load_ui(ROOT / "ui")
     api = Api()
     window = webview.create_window(
         WINDOW_TITLE,

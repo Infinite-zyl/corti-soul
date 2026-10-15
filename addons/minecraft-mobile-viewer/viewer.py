@@ -8,6 +8,7 @@ import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
 import json
+import os
 from pathlib import Path
 import re
 import secrets
@@ -160,8 +161,10 @@ def obs_profile(window, encoder='obs_x264'):
     save(scenes / 'CortiMobile.json', {'name':'CortiMobile','current_scene':'CortiMobile','current_program_scene':'CortiMobile','scene_order':[{'name':'CortiMobile'}],'sources':[source,scene],'groups':[],'modules':{},'transition_duration':300})
 
 class Service:
-    def __init__(self):
+    def __init__(self, owner=''):
         self.secret = credentials()
+        self.remote_stop = secrets.token_urlsafe(24)
+        self.owner = owner
         self.ip = lan_ip()
         self.state = '等待观察者窗口：请从 MC World 启动观察者，保持窗口非最小化。'
         self.quit = threading.Event()
@@ -290,7 +293,10 @@ def handler(service, local):
             if not self.allowed(): return
             path=self.path.split('?')[0]
             if path=='/status':
-                self.reply(200,json.dumps({'service':'corti-mobile-viewer','message':service.state,'ready':service.stream_ready},ensure_ascii=False),'application/json'); return
+                data={'service':'corti-mobile-viewer','version':'2.9.0','pid':os.getpid(),'message':service.state,'ready':service.stream_ready}
+                if not local:data['stopToken']=service.remote_stop
+                else:data['owner']=getattr(service,'owner','')
+                self.reply(200,json.dumps(data,ensure_ascii=False),'application/json'); return
             if path=='/' and local:
                 import html
                 url=f'http://{service.ip}:{PORT}/'
@@ -302,14 +308,23 @@ def handler(service, local):
                 self.reply(200,out.getvalue(),'image/svg+xml'); return
             if path=='/' and not local:
                 self.reply(200,(ROOT/'watch.html').read_bytes(),'text/html; charset=utf-8'); return
+            if path=='/watch-controls.js' and not local:
+                self.reply(200,(ROOT/'watch-controls.js').read_bytes(),'application/javascript; charset=utf-8'); return
             self.reply(404)
         def do_POST(self):
             if local and self.path=='/stop':
                 if not hmac.compare_digest(self.headers.get('X-Control-Token',''),service.secret['control']): self.reply(403); return
-                self.reply(200,'stopping'); service.quit.set(); return
+                self.reply(200,'{"ok":true}','application/json'); service.quit.set(); return
             if local or not self.allowed():
                 if local: self.reply(404)
                 return
+            if self.path=='/watch/stop':
+                origin=f'http://{service.ip}:{PORT}'
+                if self.headers.get('Origin')!=origin or not hmac.compare_digest(self.headers.get('X-Viewer-Stop',''),service.remote_stop):
+                    self.reply(403,'关闭请求校验失败，请刷新页面后重试。'); return
+                self.reply(200,'{"ok":true}','application/json')
+                service.state='观看服务已关闭，corti 和游戏继续运行。'
+                service.quit.set(); return
             if self.path!='/corti/whep' or not service.stream_ready: self.reply(503,'观察者视频尚未就绪'); return
             self.proxy('POST')
         def do_DELETE(self):
@@ -342,7 +357,8 @@ def main():
     command=sys.argv[1] if len(sys.argv)>1 else 'start'
     local=f'http://127.0.0.1:{LOCAL}/'
     if command=='serve':
-        Service().run(); return
+        owner=sys.argv[3] if len(sys.argv)==4 and sys.argv[2]=='--owner' else ''
+        Service(owner).run(); return
     if command=='stop':
         secret=json.loads((RUN/'secrets.json').read_text())
         req=urllib.request.Request(local+'stop',data=b'',headers={'X-Control-Token':secret['control']})
