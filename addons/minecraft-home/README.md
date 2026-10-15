@@ -1,5 +1,11 @@
 # `HomeBook` / `mc_home`：Minecraft持久住宅登记
 
+2.8.1：在地面赶路补丁后运行 `node patches/patch-minecraft-start-recovery.mjs`，加 `--check` 只检查。起点仅搜索一个节点的读数不再被解释为身体无法移动；静态小空间只作提示，可开启的门参与连通探查，不因“死角”直接拒绝实际回家寻路。
+
+`start-recovery.ts` 是寻路起点失败的保守 fallback。只在实际未移动且三档试算都未生成第一步时，检查已加载的真实碰撞盒、完整平地支撑、危险方块及实体占位，选择一个0.45格的退出方向；蹲行最长900ms，不挖、不搭、不跳、不TP。已有碰撞只允许减小，不能新增碰撞。30秒冷却，读回水平位移至少0.2格后最多重试一次寻路；未移动不重试，中止、受伤或新目标接管时停止。日志事件为 `goto-start-recovery`，不新增后台模型请求。未知区块、台阶、落差、水中等情况不会强行尝试；此 fallback 不保证所有栅栏布局都能脱困。
+
+新增测试：`node --test addons/minecraft-home/tests/start-recovery.test.mjs`；实际执行链回放：用 Cortico 的 `tsx` 运行 `addons/minecraft-home/tests/start-travel-integration.mts`。真实牧场仍需用户正常重启后验收，不以模拟身体的通过代替游戏实测。
+
 2.7.0：前五层补丁后运行`node patches/patch-minecraft-surface-route.mjs`，加`--check`只检查。普通寻路`canDig:false`，默认赶路规则`walk`；旧`dig/auto/place`偏好在下次World初始化时只迁移travel字段，其他规则保留。`mc_policy`不能恢复普通寻路挖掘。显式采集、建设和采矿技能不因此禁用，保护区依旧禁止破坏。
 
 `surface-route.ts`只对已知天空亮度≤3、比当前出发处低超过3格的路点增加代价；明确地下目的地不加此项。没有独立模型探测，也不以未知亮度推断洞穴。不保证所有路线都走露天。寻路器落差2按支撑格计数，保留正常下一格实心台阶；dig试算单独恢复canDig，仅展示假设路线，不代表普通赶路会执行挖路。
