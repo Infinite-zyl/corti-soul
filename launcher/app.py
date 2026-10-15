@@ -20,6 +20,7 @@ import threading
 import time
 import urllib.request
 import webbrowser
+from model_routing import ModelRouting
 
 import coreclr_env  # noqa: F401  — 必须在 import webview 之前导入
 import webview
@@ -107,6 +108,9 @@ GUARD_DIR = PKG / "guard"
 GUARD_SCRIPT = GUARD_DIR / "upstream-guard.mjs"
 GUARD_CFG = GUARD_DIR / "upstream-guard.json"
 GUARD_STATE = GUARD_DIR / "upstream-guard-state.json"
+# 托管服务的 stdout/stderr 落这里（按服务分文件）。启动器自己的日志窗口只留一行摘要，
+# 排查失败原因要看这些文件。
+LOG_DIR = PKG / "launcher" / "logs"
 
 
 # --------------------------------------------------------------------------- #
@@ -398,6 +402,8 @@ class Api:
         self.busy = False
         self._quitting = False
         self._shutdown_done = False
+        self._model_routing = ModelRouting(GUARD_DIR / 'routing-mode.json', CONSOLE_URL,
+                                           lambda: self.stop_service('guard'), lambda: self.start_service('guard'))
         self._log("启动器就绪。")
 
     # ---- 基础设施 ---------------------------------------------------------- #
@@ -407,16 +413,38 @@ class Api:
     def _log(self, msg: str) -> None:
         self._logs.append(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
+    def _service_log_path(self, service_id: str) -> pathlib.Path:
+        """托管服务的输出落到这里，按服务分文件。"""
+        return LOG_DIR / f"{service_id}.log"
+
     def _launch(self, service_id: str, args: list[str], *, cwd: pathlib.Path, env: dict) -> subprocess.Popen:
         with self._process_lock:
             if self._quitting:
                 raise RuntimeError("启动器正在退出")
-            proc = subprocess.Popen(
-                args, cwd=str(cwd), env=env, creationflags=_FLAGS, close_fds=True,
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            # 输出直接重定向到文件，不走管道：进程是 DETACHED 的，启动器退出后还要继续跑，
+            # 管道会随启动器一起关掉，之后再往 stdout 写就会拿到 EPIPE。
+            log = open(self._service_log_path(service_id), "ab", buffering=0)
+            try:
+                log.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} 启动 {service_id} =====\n".encode("utf-8"))
+                proc = subprocess.Popen(
+                    args, cwd=str(cwd), env=env, creationflags=_FLAGS, close_fds=True,
+                    stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                )
+            finally:
+                log.close()
             self._launched_pids[service_id].add(proc.pid)
+            self._log(f"{service_id} 的输出写到 {self._service_log_path(service_id)}")
             return proc
+
+    def _service_log_tail(self, service_id: str, lines: int = 6, width: int = 600) -> str:
+        """服务日志的最后几行，用在失败提示里，省得让人自己去找文件。"""
+        try:
+            text = self._service_log_path(service_id).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        tail = [ln.strip() for ln in text.splitlines() if ln.strip()][-lines:]
+        return "；".join(tail)[-width:] if tail else ""
 
     # ---- 窗口控制 ---------------------------------------------------------- #
     def hide_window(self) -> dict:
@@ -659,7 +687,8 @@ class Api:
                 return {"ok": False, "msg": f"启动 Cortico 失败：{e}"}
             if wait_port(7788, 90, "Cortico 控制台", self._log, lambda: self._quitting):
                 return {"ok": True, "msg": "Cortico 控制台已启动。"}
-            return {"ok": False, "msg": "Cortico 启动超时。"}
+            tail = self._service_log_tail("cortico")
+            return {"ok": False, "msg": f"Cortico 启动超时。{tail}" if tail else "Cortico 启动超时。"}
 
         if service_id == "guard":
             _guard_cache["ts"] = 0.0
@@ -691,6 +720,17 @@ class Api:
         return {"ok": True}
 
     # ---- 状态 -------------------------------------------------------------- #
+    def get_model_options(self) -> dict:
+        try:
+            return self._model_routing.options()
+        except Exception as error:
+            return {'ok': False, 'msg': str(error), 'providers': []}
+
+    def set_model_mode(self, mode: str, provider: str = '') -> dict:
+        result = self._model_routing.apply(mode, provider)
+        self._log(result['msg'])
+        return result
+
     def get_status(self) -> dict:
         svcs = probe_all()
         with self._action_lock:
@@ -701,6 +741,7 @@ class Api:
         guard_cfg = read_json(GUARD_CFG)
         items, run = recent_activity()
         provider = {
+            "routing": self._model_routing.state(),
             "active": guard_state.get("current", ""),
             "primary": guard_cfg.get("primary", ""),
             "fallback": guard_cfg.get("fallback", ""),
@@ -709,6 +750,10 @@ class Api:
             "probeEvery": guard_cfg.get("probeIntervalSec", 60),
         }
         active = active_provider()
+        for service in svcs:
+            service['paused'] = service['id'] == 'guard' and provider['routing']['mode'] == 'manual'
+            if service['paused']:
+                service['detail'] = '手动模式 · 自动切换已暂停'
         if active:
             provider["active"] = str(active)
 
@@ -719,7 +764,7 @@ class Api:
             "uptime": f"{round(time.time() - _START)}s",
             "serviceCount": len(svcs),
             "services": svcs,
-            "allUp": all(s["up"] for s in svcs),
+            "allUp": all(s["up"] or s.get('paused') for s in svcs),
             "core": all(s["up"] for s in svcs if s["id"] in {"dsh", "snow", "onebot", "cortico"}),
             "provider": provider,
             "activity": items,
@@ -818,13 +863,18 @@ class Api:
                     self._log(f"拉起 Cortico 失败：{e}")
                 if wait_port(7788, 90, "Cortico 控制台", self._log, lambda: self._quitting):
                     self._log("Cortico 就绪。")
+                else:
+                    tail = self._service_log_tail("cortico")
+                    self._log(f"Cortico 没起来，日志末尾：{tail}" if tail else "Cortico 没起来，见 launcher/logs/cortico.log。")
                 if self._quitting:
                     return
 
             # ⑥ 免费池守护
             if self._quitting:
                 return
-            if guard_running():
+            if self._model_routing.state()['mode'] == 'manual':
+                self._log('手动模式：免费池自动守护保持暂停。')
+            elif guard_running():
                 self._log("免费池守护已在运行。")
             else:
                 try:

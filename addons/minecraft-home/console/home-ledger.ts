@@ -63,7 +63,8 @@ export const homeLedgerPanel:ConsolePanel={
       else{
         body.append(ui.section(next.home.name??'家'),ui.kv([{k:'维度',v:next.home.dimension},{k:'返回位置',v:coords(next.home.returnAt!)},{k:'保护范围',v:next.protection?range(next.protection):'未设置'}]));
         const table=ui.table({head:['设施','用途','坐标','现场状态']});
-        for(const f of next.home.facilities??[])table.addRow([f.kind,({'own-bed':'她的床','user-bed':'你的床','shared-storage':'共享容器',workbench:'工作台',furnace:'炉子'})[f.role],coords(f.at),states[f.status]??f.status]);
+        for(const f of next.home.facilities??[])table.addRow([f.kind,({'own-bed':'她的床','user-bed':'你的床','shared-storage':'共享容器',workbench:'工作台',furnace:'炉子',entrance:'家门'})[f.role],coords(f.at),states[f.status]??f.status]);
+        if(next.home.entrance)body.append(ui.kv([{k:'门内落脚点',v:coords(next.home.entrance.inside)},{k:'门外落脚点',v:coords(next.home.entrance.outside)}]));
         body.append(table.el);
       }
       body.append(ui.section('其他建筑'));
@@ -80,6 +81,9 @@ export const homeLedgerPanel:ConsolePanel={
       for(const f of s.facilities){
         const role=f.kind==='crafting_table'?'workbench':['furnace','blast_furnace','smoker'].includes(f.kind)?'furnace':['chest','trapped_chest','barrel'].includes(f.kind)?'shared-storage':null;
         const row=ui.actions();row.append(ui.h('span','',`${f.kind} (${coords(f.at)})`));
+        if(f.kind.endsWith('_door')&&f.kind!=='iron_door')row.append(ui.button('登记为家门（我站门外）',{size:'sm',onClick:()=>void run(async()=>{
+          if(await ui.confirm({title:'确认这是家的大门？',body:`${f.kind} (${coords(f.at)})。请Infinite站在门外1至3格的可站立位置；该站位将作为门外落脚点，门对侧一格作为门内落脚点。`}))await change({action:'entrance',at:f.at,confirmation:'控制台用户站门外确认家门 '+coords(f.at)});
+        })}));
         if(role&&!state?.home.facilities?.some(x=>coords(x.at)===coords(f.at)))row.append(ui.button('登记为家中共享设施',{size:'sm',onClick:()=>void run(async()=>{
           if(await ui.confirm({title:'确认设施可供她使用？',body:`${f.kind} (${coords(f.at)})；确认这是家中可以使用的设施。`}))await change({action:'facilities',facilities:[{at:f.at,role}],confirmation:'控制台用户确认共享设施 '+f.kind+' '+coords(f.at)});
         })}));nearby.append(row);

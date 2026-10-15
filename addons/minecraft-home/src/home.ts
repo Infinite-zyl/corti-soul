@@ -4,8 +4,9 @@ import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 export type Point = [number, number, number];
-export type HomeRole = 'own-bed' | 'user-bed' | 'shared-storage' | 'workbench' | 'furnace';
-export interface HomeBlock { name: string; properties: Record<string, unknown> }
+export type HomeRole = 'own-bed' | 'user-bed' | 'shared-storage' | 'workbench' | 'furnace' | 'entrance';
+export interface HomeBlock { name: string; properties: Record<string, unknown>; solid?:boolean }
+export interface HomeEntrance { at:Point; inside:Point; outside:Point; kind:string }
 export interface HomeObserver {
   dimension: string;
   position: Point;
@@ -18,6 +19,7 @@ export interface HomeRecord {
   name: string; dimension: string; returnAt: Point; facilities: HomeFacility[];
   confirmation: string; updatedAt: string;
   protection?: { min: Point; max: Point };
+  entrance?:HomeEntrance;
 }
 export interface BuildingRecord {
   name: string; dimension: string; protection: { min: Point; max: Point };
@@ -52,7 +54,7 @@ export function homeRealmKey(serverDir: string, local: boolean, worldKey: string
   }
   return `weak:${address}|${local ? worldKey : ''}`;
 }
-const ROLES: HomeRole[] = ['own-bed', 'user-bed', 'shared-storage', 'workbench', 'furnace'];
+const ROLES: HomeRole[] = ['own-bed', 'user-bed', 'shared-storage', 'workbench', 'furnace','entrance'];
 const OFFSETS: Record<string, Point> = { north: [0, 0, -1], south: [0, 0, 1], east: [1, 0, 0], west: [-1, 0, 0] };
 const key = (p: Point): string => p.join(',');
 const isBed = (name: string): boolean => name.endsWith('_bed');
@@ -74,12 +76,21 @@ function compatible(role: HomeRole, name: string): boolean {
   if (role === 'own-bed' || role === 'user-bed') return isBed(name);
   if (role === 'shared-storage') return ['chest', 'trapped_chest', 'barrel'].includes(name);
   if (role === 'workbench') return name === 'crafting_table';
+  if (role === 'entrance') return name.endsWith('_door')&&name!=='iron_door';
   return ['furnace', 'blast_furnace', 'smoker'].includes(name);
 }
 /** 床以头部为登记坐标，合并两半；不从邻近床猜归属。 */
 export function canonicalFacility(at: Point, observer: HomeObserver): { at: Point; block: HomeBlock } {
   const block = observer.read(at);
   if (!block) throw new Error(`设施(${key(at)})尚未加载，走近核验后再登记`);
+  if(block.name.endsWith('_door')){
+    const half=block.properties.half;if(half!=='upper'&&half!=='lower')throw new Error('门的上下半状态无法核验');
+    const lower:Point=[at[0],at[1]-(half==='upper'?1:0),at[2]],upper:Point=[lower[0],lower[1]+1,lower[2]];
+    const lo=observer.read(lower),hi=observer.read(upper);
+    if(!lo||!hi)throw new Error('门的另一半尚未加载');
+    if(lo.name!==hi.name||lo.properties.half!=='lower'||hi.properties.half!=='upper'||lo.properties.facing!==hi.properties.facing)throw new Error('门的上下半不完整或不匹配');
+    return {at:lower,block:lo};
+  }
   if (!isBed(block.name)) return { at, block };
   const offset = OFFSETS[String(block.properties.facing)];
   const part = block.properties.part;
@@ -114,6 +125,14 @@ function validateHome(value: unknown): HomeRecord {
   });
   if (facilities.filter((f) => f.role === 'own-bed').length !== 1) throw new Error('必须明确登记一张自己的床');
   if (facilities.filter((f) => f.role === 'user-bed').length > 1) throw new Error('用户床最多登记一张');
+  if(facilities.filter(f=>f.role==='entrance').length>1)throw new Error('当前家门最多登记一处');
+  let entrance:HomeEntrance|undefined;
+  if(home.entrance!==undefined){const e=object(home.entrance);const at=point(e.at),inside=point(e.inside),outside=point(e.outside),kind=text(e.kind,'家门种类',80);
+    if(!facilities.some(f=>f.role==='entrance'&&key(f.at)===key(at)&&f.kind===kind))throw new Error('家门路径与设施登记不匹配');
+    const ax=inside[0]-at[0],az=inside[2]-at[2],bx=outside[0]-at[0],bz=outside[2]-at[2];
+    if(Math.hypot(ax,az)>3||Math.hypot(bx,bz)>3||ax*bx+az*bz>=0||Math.abs(inside[1]-at[1])>1||Math.abs(outside[1]-at[1])>1)throw new Error('门内外落脚点必须在门两侧3格内');
+    entrance={at,inside,outside,kind};
+  }
   let protection: HomeRecord['protection'];
   if (home.protection !== undefined) {
     const box=object(home.protection); const min=point(box.min);const max=point(box.max);
@@ -121,7 +140,7 @@ function validateHome(value: unknown): HomeRecord {
     if(facilities.some(f=>f.at.some((v,i)=>v<min[i]!||v>max[i]!)))throw new Error('保护边界必须包含所有登记设施');
     protection={min,max};
   }
-  return { name, dimension, returnAt, facilities, ...(protection?{protection}:{}),
+  return { name, dimension, returnAt, facilities, ...(protection?{protection}:{}),...(entrance?{entrance}:{}),
     confirmation: text(home.confirmation, '用户确认说明', 500), updatedAt: text(home.updatedAt, '更新时间', 80) };
 }
 
@@ -170,6 +189,23 @@ export class HomeBook {
     text(confirmation,'用户确认说明',500);const n=text(name,'建筑名称',80),dim=text(dimension,'维度',80),d=this.load();
     d.buildings[realm]=(d.buildings[realm]??[]).filter(b=>b.name!==n||b.dimension!==dim);this.commit(d);
   }
+  setEntrance(realm:string,input:unknown,observer:HomeObserver):HomeRecord {
+    const a=object(input),data=this.load(),home=data.homes[realm];if(!home||home.dimension!==observer.dimension)throw new Error('需在已登记家的维度现场认门');
+    text(a.confirmation,'用户确认说明',500);const door=canonicalFacility(point(a.at),observer);
+    if(!compatible('entrance',door.block.name))throw new Error('家门需要可手动开启的木门；铁门需另行设计门控路线');
+    if(Math.hypot(...door.at.map((n,i)=>n-observer.position[i]!))>16)throw new Error('请走近家门16格内核验');
+    const direction=OFFSETS[String(door.block.properties.facing)];if(!direction)throw new Error('无法读取门朝向');
+    const outside=a.outside===undefined?observer.playerPosition:point(a.outside);if(!outside)throw new Error('请Infinite站在门外，或明确提供outside坐标');
+    const side=(outside[0]-door.at[0])*direction[0]+(outside[2]-door.at[2])*direction[2];if(side===0)throw new Error('请站在门外的一侧，不要站门框中');
+    const inside=a.inside===undefined?[door.at[0]-Math.sign(side)*direction[0],door.at[1],door.at[2]-Math.sign(side)*direction[2]] as Point:point(a.inside);
+    for(const p of [inside,outside]){const feet=observer.read(p),head=observer.read([p[0],p[1]+1,p[2]]),floor=observer.read([p[0],p[1]-1,p[2]]);
+      if(!feet||!head||!floor)throw new Error('门内外落脚点尚未加载');
+      if(feet.solid!==false||head.solid!==false||floor.solid!==true||['water','lava','fire','powder_snow'].includes(feet.name))throw new Error('门内外落脚点需可站立且没有实心阻挡，请重新确认位置');
+    }
+    const facilities=home.facilities.filter(f=>f.role!=='entrance');facilities.push({at:door.at,kind:door.block.name,role:'entrance'});
+    const next=validateHome({...home,facilities,entrance:{at:door.at,kind:door.block.name,inside,outside},confirmation:a.confirmation,updatedAt:new Date().toISOString()});
+    data.homes[realm]=next;this.commit(data);return next;
+  }
   addFacilities(realm:string,input:unknown,observer:HomeObserver):HomeRecord {
     const a=object(input),data=this.load(),home=data.homes[realm];
     if(!home||home.dimension!==observer.dimension)throw new Error('需在已登记家的维度现场补登记设施');
@@ -199,7 +235,7 @@ export class HomeBook {
       const bed = home.facilities.find((f) => f.role === 'own-bed')!;
       const stations=home.facilities.filter(f=>['workbench','furnace'].includes(f.role)).map(f=>`${f.kind}(${key(f.at)})`).join('、');
       const buildings=this.buildings(realm).slice(0,4).map(b=>`${b.name}[${b.owner==='user'?'用户设施，不是你的待办':b.owner==='shared'?'共享设施':'自建设施'}；${b.purpose.slice(0,40)}；${b.dimension}](${key(b.protection.min)})至(${key(b.protection.max)})`).join('；');
-      return `[家·历史登记] ${home.name}，${home.dimension}，返回(${key(home.returnAt)})；自己的床(${key(bed.at)})，设施${home.facilities.length}项。现成工作设施：${stations||'尚未登记，先survey查找'}。${buildings?'建筑保护：'+buildings+'。':''}先复用现成设施，不重复合成/摆放；远处登记需走近核验。当前存在/占用情况需mc_home核验；个人约定仍由你写进自己的笔记。`;
+      return `[家·历史登记] ${home.name}，${home.dimension}，返回(${key(home.returnAt)})；自己的床(${key(bed.at)})，设施${home.facilities.length}项。${home.entrance?`家门(${key(home.entrance.at)})，门内(${key(home.entrance.inside)})，门外(${key(home.entrance.outside)})。`:'家门尚未登记，请让用户站门外确认入口。'}现成工作设施：${stations||'尚未登记，先survey查找'}。${buildings?'建筑保护：'+buildings+'。':''}先复用现成设施，不重复合成/摆放；远处登记需走近核验。当前存在/占用情况需mc_home核验；个人约定仍由你写进自己的笔记。`;
     } catch (error) { return `[家] ${error instanceof Error ? error.message : String(error)}`; }
   }
   query(realm: string, observer: HomeObserver | null): object {
@@ -214,7 +250,8 @@ export class HomeBook {
         const checked = canonicalFacility(f.at, observer);
         if (key(checked.at) !== key(f.at)) return { ...f, status: 'invalid', actual: '床的头尾位置已改变' };
         const occupied = checked.block.properties.occupied === true || checked.block.properties.occupied === 'true';
-        return { ...f, status: isBed(block.name) && occupied ? 'occupied' : 'present', actual: block.name };
+        return { ...f, status: isBed(block.name) && occupied ? 'occupied' : 'present', actual: block.name,
+          ...(f.role==='entrance'?{open:checked.block.properties.open===true||checked.block.properties.open==='true'}:{}) };
       } catch (error) {
         return { ...f, status: String(error).includes('尚未加载') ? 'unloaded' : 'invalid' };
       }
@@ -255,6 +292,7 @@ export class HomeBook {
     const returnAt = args.returnAt === undefined ? observer.position : point(args.returnAt);
     if (Math.hypot(...returnAt.map((n, i) => n - observer.position[i]!)) > 32) throw new Error('返回位置超出现场32格');
     const home = validateHome({ name: args.name, dimension: observer.dimension, returnAt, facilities, protection: args.protection ?? old?.protection,
+      entrance:old?.entrance&&facilities.some(f=>f.role==='entrance'&&key(f.at)===key(old.entrance!.at))?old.entrance:undefined,
       confirmation: args.confirmation, updatedAt: new Date().toISOString() });
     data.homes[realm] = home; this.commit(data); return home;
   }
@@ -273,7 +311,10 @@ export const MINECRAFT_HOME_TOOL = {
   name: 'mc_home', tags: ['write'] as const,
   description: 'Persistent home and facility records for the current save. With no fields query the registered home and current loaded facility states. action:survey reads loaded blocks within 16 blocks of nearby Infinite (within32), otherwise yourself; candidates do not imply ownership. Ask the user which bed is yours, which bed is theirs and which storage is shared. Only save/update/remove after explicit user confirmation, quote that confirmation. Do not infer home from spawn. Updates require replace:true and a complete facility list. Save records external facts, not personal memory; write personal agreements using your own memory tools. Use exact registered coordinates with existing mc_do use/goto when needed; this tool never moves or sleeps.',
   parameters: { type: 'object', properties: {
-    action: { type: 'string', enum: ['query', 'survey', 'save', 'remove', 'protect','ledger','building-save','building-remove','facilities'], description: 'ledger查询家与建筑账本。protect确认家周边保护范围：radius以家返回位置为中心，或指定protection精确框。building-save登记用户现场指认的农田等建筑；radius以附近Infinite或自己为中心，水平半径、下4上16格，也可精确框。所有范围先与用户确认，不猜房屋边界，整个范围禁止挖掘（包括作物）；只操作门、炉子等不受影响。building-remove需名称和dimension。facilities补充用户确认的共享箱、工作台/炉子，不修改床；先survey。不得为采集或寻路擅自撤销保护。' },
+    action: { type: 'string', enum: ['query', 'survey', 'save', 'remove', 'protect','ledger','building-save','building-remove','facilities','entrance'], description: 'entrance在用户站门外明确确认后登记木门及内外落脚点；不要猜哪个门是大门。ledger查询家与建筑账本。protect确认家周边保护范围：radius以家返回位置为中心，或指定protection精确框。building-save登记用户现场指认的农田等建筑；radius以附近Infinite或自己为中心，水平半径、下4上16格，也可精确框。所有范围先与用户确认，不猜房屋边界，整个范围禁止挖掘（包括作物）；只操作门、炉子等不受影响。building-remove需名称和dimension。facilities补充用户确认的共享箱、工作台/炉子，不修改床；先survey。不得为采集或寻路擅自撤销保护。' },
+    at:{type:'array',items:{type:'integer'},minItems:3,maxItems:3,description:'entrance所选家门坐标；门上下两半自动合并为下半。'},
+    inside:{type:'array',items:{type:'integer'},minItems:3,maxItems:3,description:'可选门内落脚点；默认按门外位置取对侧一格。'},
+    outside:{type:'array',items:{type:'integer'},minItems:3,maxItems:3,description:'用户确认的门外落脚点；默认用Infinite当前站位。'},
     radius:{type:'integer',minimum:1,maximum:64},
     dimension:{type:'string',maxLength:80},
     owner:{type:'string',enum:['user','shared','self'],description:'建筑归属，旧登记默认user；用户设施未委托经营时不产生你的采集、维修或管理任务。'},

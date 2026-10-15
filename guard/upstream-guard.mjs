@@ -9,6 +9,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { syncAuxiliaryModels as syncAuxiliaryConfig } from './auxiliary-models.mjs';
+import {routingMode,assertAutoRouting} from './routing-mode.mjs';
 
 const GUARD_DIR = import.meta.dirname;
 const REPO_ROOT = path.resolve(GUARD_DIR, '..');
@@ -19,13 +21,13 @@ const RUNS_DIR = path.join(CORTICO, 'deployments', process.env.DEPLOY_NAME ?? 'm
 const DEFAULTS = {
   corticoUrl: 'http://127.0.0.1:7788',
   freeProviders: [
-    { name: 'DSH_free_mimo-v26-flash', lane: 'kilo', sideModel: 'dots-studio/dots-3-note-preview:free' },
+    { name: 'DSH_free_dots-3-note', lane: 'kilo', sideModel: 'dots-studio/dots-3-note-preview:free' },
     {
       name: 'DSH_free_zen-mimo-v26-flash',
       lane: 'zen',
       model: 'mimo-v2.6-flash-free',
       sideModel: 'mimo-v2.6-flash-free',
-      copyFrom: 'DSH_free_mimo-v26-flash',
+      copyFrom: 'DSH_free_dots-3-note',
     },
   ],
   paidFallback: 'DSH_free_deepseek-v41-flash',
@@ -61,7 +63,7 @@ function loadConfig() {
   const freeProviders = Array.isArray(raw.freeProviders) && raw.freeProviders.length
     ? raw.freeProviders
     : [
-        { name: raw.primary ?? DEFAULTS.freeProviders[0].name, lane: 'kilo' },
+        { ...DEFAULTS.freeProviders[0], name: raw.primary ?? DEFAULTS.freeProviders[0].name },
         {
           ...DEFAULTS.freeProviders[1],
           copyFrom: raw.primary ?? DEFAULTS.freeProviders[0].name,
@@ -80,6 +82,8 @@ const cfg = loadConfig();
 const state = loadState();
 const cursors = new Map();
 let stopping = false;
+let nextAuxiliarySyncAt = 0;
+let auxiliaryProvider = null;
 
 function loadState() {
   try {
@@ -108,6 +112,7 @@ function todayShanghai() {
 }
 
 async function api(pathname, options = {}) {
+  assertAutoRouting(options.method??'GET');
   const { timeoutMs = 10000, ...init } = options;
   return fetch(`${cfg.corticoUrl.replace(/\/+$/, '')}${pathname}`, {
     ...init,
@@ -136,30 +141,17 @@ async function activate(name) {
 
 /** Keep the QQ/gaming side-calls on the same currently selected free lane. */
 async function syncAuxiliaryModels(model) {
-  if (!model) return;
-  const targets = new Set([
-    'worlds.qqbot.vision.model',
-    'worlds.qqbot.proactive.model',
-    'worlds.qqbot.emotion.model',
-    'worlds.gaming.watch.model',
-  ]);
-  const res = await api('/api/config');
-  if (!res.ok) throw new Error(`GET /api/config HTTP ${res.status}`);
-  const groups = (await res.json()).groups ?? [];
-  for (const group of groups) {
-    const properties = group?.schema?.properties ?? {};
-    const values = Object.fromEntries(
-      [...targets].filter((key) => Object.hasOwn(properties, key)).map((key) => [key, model]),
-    );
-    if (!Object.keys(values).length) continue;
-    const saved = await api('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ group: group.id, values }),
-    });
-    if (!saved.ok) throw new Error(`更新侧调用模型 HTTP ${saved.status}`);
-    log(`QQ / gaming 侧调用已同步到 ${model}`);
-  }
+  await syncAuxiliaryConfig(api, model, log);
+}
+
+async function reconcileAuxiliaryModels(active) {
+  const provider = cfg.freeProviders.find((item) => item.name === active);
+  if (!provider?.sideModel) return;
+  if (auxiliaryProvider === active && Date.now() < nextAuxiliarySyncAt) return;
+  auxiliaryProvider = active;
+  nextAuxiliarySyncAt = Date.now() + 60_000;
+  try { await syncAuxiliaryModels(provider.sideModel); }
+  catch (e) { log(`侧调用同步失败，60 秒后重试: ${String(e.message).slice(0, 220)}`); }
 }
 
 async function activateFreeProvider(provider) {
@@ -239,7 +231,13 @@ async function switchAfterFailure(status) {
   state.current = active;
   const lanes = laneStates();
   const current = cfg.freeProviders.find((provider) => provider.name === active);
-  if (!current) return; // Never override a manually selected, unmanaged endpoint.
+  if (!current) {
+    state.unmanagedFailures = (state.unmanagedFailures ?? 0) + 1;
+    state.lastUnmanagedFailure = { provider: active, status, at: Date.now() };
+    saveState();
+    log(`当前端点 ${active} 未列入 freeProviders，已记录失败但不自动切换；请检查守护配置。`);
+    return;
+  }
 
   const failure = lanes[active] ??= { count: 0, blockedUntil: 0 };
   failure.count++;
@@ -391,14 +389,12 @@ log(`免费车道顺序: ${cfg.freeProviders.map((provider) => `${provider.lane}
 log(`付费备用: ${cfg.paidFallback}; 每日最多切入 ${cfg.maxPaidSwitchesPerDay} 次`);
 
 try {
-  await provisionFreeProviders();
+  if(routingMode()==='auto')await provisionFreeProviders();
   state.current = await getActive();
   if (state.managedCurrent !== state.current) state.managedCurrent = null;
-  const activeFree = cfg.freeProviders.find((provider) => provider.name === state.current);
-  if (activeFree?.sideModel) {
-    try { await syncAuxiliaryModels(activeFree.sideModel); }
-    catch (e) { log(`启动时侧调用同步失败: ${String(e.message).slice(0, 100)}`); }
-  }
+  if (!cfg.freeProviders.some((provider) => provider.name === state.current) && state.current !== cfg.paidFallback)
+    log(`配置提示：当前端点 ${state.current} 不在 freeProviders 中，免费池轮换不会接管此端点。`);
+  if(routingMode()==='auto')await reconcileAuxiliaryModels(state.current);
   if (!state.day) { state.day = todayShanghai(); state.paidSwitches = 0; }
   seedLogCursors();
   saveState();
@@ -409,12 +405,20 @@ try {
   log(`启动时连接 Cortico 未就绪: ${String(e.message).slice(0, 100)}（稍后继续）`);
 }
 
+let routingWasManual=false;
 while (!stopping) {
+  if(routingMode()!=='auto'){
+    routingWasManual=true;
+    await new Promise(resolve=>setTimeout(resolve,cfg.logPollIntervalMs));
+    continue;
+  }
+  if(routingWasManual){seedLogCursors();routingWasManual=false;}
   try {
     resetDailyBudget();
     const active = await getActive();
     if (state.current !== active && state.managedCurrent !== active) state.managedCurrent = null;
     state.current = active;
+    await reconcileAuxiliaryModels(active);
     await pollRunLogs();
     await recoverHigherPriorityLane();
   } catch (e) { log(`轮询异常: ${String(e.message).slice(0, 120)}`); }

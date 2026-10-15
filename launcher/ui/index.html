@@ -135,6 +135,16 @@
   }
   .chip.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
   .chip.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
+  .model-routing{display:flex;align-items:end;gap:10px;flex-wrap:wrap;margin-top:10px}
+  .model-routing label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--dim)}
+  .model-routing select,.model-routing button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-height:36px}
+  .model-routing select{max-width:420px;min-width:140px}
+  .model-routing option{background:#201b29;color:#f6f1fc}
+  .model-routing :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .model-routing :disabled{opacity:.5;cursor:not-allowed}
+  .model-routing button{cursor:pointer}
+  .model-routing button:hover:not(:disabled){background:var(--panel2)}
+  .model-mode-note{font-size:12px;color:var(--dim);margin-top:7px;line-height:1.5}
 
   /* ---------- 服务卡 ---------- */
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(184px,1fr));gap:10px}
@@ -150,6 +160,7 @@
   }
   .svc.up .dot{background:var(--ok);box-shadow:0 0 9px color-mix(in srgb,var(--ok) 65%,transparent)}
   .svc.up{border-color:color-mix(in srgb,var(--ok) 26%,transparent)}
+  .svc.paused .dot{background:var(--muted);box-shadow:none}
   .svc.pending{border-color:color-mix(in srgb,var(--warn) 45%,transparent);background:rgba(251,191,36,.055)}
   .svc.pending .dot{background:var(--warn);box-shadow:0 0 10px color-mix(in srgb,var(--warn) 65%,transparent);animation:pulse 1.1s ease-in-out infinite alternate}
   .svc.pending .st{color:var(--warn)}
@@ -284,6 +295,15 @@
         <div class="grow"></div>
         <div class="chips" id="p-chips"></div>
       </div>
+      <div>
+        <div class="model-routing">
+          <label>切换方式<select id="model-mode"><option value="auto">自动切换</option><option value="manual">手动固定</option></select></label>
+          <label>主模型端点<select id="model-choice" disabled><option value="">先刷新模型列表</option></select></label>
+          <button id="model-refresh" type="button" onclick="loadModelOptions()">刷新模型列表</button>
+          <button id="model-apply" type="button" onclick="applyModelMode()">应用</button>
+        </div>
+        <div class="model-mode-note" id="model-note" role="status" aria-live="polite">自动：沿用现有故障切换。手动：固定主模型，限流只报错，不自动换线路。</div>
+      </div>
 
       <div>
         <div class="sect" style="margin-bottom:9px">装配状态</div>
@@ -367,16 +387,16 @@ function renderServices(list) {
       box.appendChild(el);
     }
     const action = s.action || localActions.get(s.id) || '';
-    el.className = 'svc' + (s.up ? ' up' : '') + (action ? ' pending' : '');
+    el.className = 'svc' + (s.up ? ' up' : '') + (s.paused ? ' paused' : '') + (action ? ' pending' : '');
     el.querySelector('.txt b').textContent = s.name;
     el.querySelector('.txt i').textContent = s.detail;
     const st = el.querySelector('.st');
-    st.textContent = action === 'stopping' ? '停止中' : action === 'starting' ? '启动中' : s.up ? '在线' : '离线';
+    st.textContent = action === 'stopping' ? '停止中' : action === 'starting' ? '启动中' : s.paused ? '已暂停' : s.up ? '在线' : '离线';
     const control = el.querySelector('.service-action');
     if (control) {
       control.className = 'service-action ' + (action ? 'pending' : s.up ? 'stop' : 'start');
-      control.textContent = action === 'stopping' ? '停止中…' : action === 'starting' ? '启动中…' : s.up ? '停止' : '启动';
-      control.disabled = !!action;
+      control.textContent = action === 'stopping' ? '停止中…' : action === 'starting' ? '启动中…' : s.paused ? '手动模式' : s.up ? '停止' : '启动';
+      control.disabled = !!action || !!s.paused;
       control.title = s.id === 'onebot'
         ? 'OneBot WS 由 SnowLuma 承载，操作时会联动 SnowLuma'
         : s.id === 'snow' ? 'SnowLuma 承载 OneBot WS，操作时会联动 OneBot WS' : '';
@@ -405,12 +425,16 @@ function renderServices(list) {
 }
 
 function renderProvider(p) {
+  if(p.routing?.error)$('model-note').textContent=p.routing.error;
+  if(!modelDraft&&!modelBusy)$('model-mode').value=p.routing?.mode||'auto';
+  if(!modelDraft&&!modelBusy&&p.routing?.provider&&Array.from($('model-choice').options).some(o=>o.value===p.routing.provider))$('model-choice').value=p.routing.provider;
+  updateModelControls();
   $('p-active').textContent = p.active || '未知（守护未运行或控制台未响应）';
   const chips = [];
   if (p.active && p.primary && p.active === p.primary) chips.push(['主用 · 免费池', 'ok']);
   else if (p.active && p.fallback && p.active === p.fallback) chips.push(['已切备用 · 渠道网关', 'warn']);
   chips.push([(p.switches || 0) + '/' + (p.maxSwitches || 12) + ' 今日切换', '']);
-  chips.push(['探测 ' + (p.probeEvery || 60) + 's', '']);
+  chips.push([p.routing?.mode==='manual'?'手动固定 · 不自动换线':'自动切换','']);
   const box = $('p-chips');
   box.innerHTML = '';
   chips.forEach(([txt, cls]) => {
@@ -421,6 +445,36 @@ function renderProvider(p) {
   });
 }
 
+let modelBusy=false,modelDraft=false;
+function updateModelControls(){
+  $('model-mode').disabled=modelBusy;
+  $('model-choice').disabled=modelBusy||$('model-mode').value!=='manual';
+  $('model-refresh').disabled=modelBusy;
+  $('model-apply').disabled=modelBusy||($('model-mode').value==='manual'&&!$('model-choice').value);
+}
+$('model-mode').addEventListener('change',()=>{modelDraft=true;updateModelControls();if($('model-mode').value==='manual'&&!$('model-choice').value)void loadModelOptions();});
+$('model-choice').addEventListener('change',()=>{modelDraft=true;updateModelControls();});
+async function loadModelOptions(){
+  if(modelBusy)return;modelBusy=true;updateModelControls();$('model-note').textContent='读取已配置模型端点…';
+  try{
+    const result=await window.pywebview.api.get_model_options();if(!result.ok)throw Error(result.msg||'读取失败');
+    const selected=$('model-choice').value||result.routing?.provider||result.active;
+    $('model-choice').replaceChildren();
+    for(const p of result.providers){const option=document.createElement('option');option.value=p.id;option.textContent=p.name+' · '+p.model;$('model-choice').append(option);}
+    if(result.providers.some(p=>p.id===selected))$('model-choice').value=selected;
+    $('model-note').textContent=result.providers.length?'列表来自 Cortico 已配置端点；读取列表不调用模型。':'没有已配置的模型，请先在 Cortico 控制台添加端点。';
+  }catch(e){$('model-note').textContent=e.message||String(e);}
+  finally{modelBusy=false;updateModelControls();}
+}
+async function applyModelMode(){
+  if(modelBusy)return;modelBusy=true;updateModelControls();$('model-note').textContent='正在应用切换方式…';
+  try{
+    const result=await window.pywebview.api.set_model_mode($('model-mode').value,$('model-choice').value);
+    $('model-note').textContent=result.msg||'操作已结束';if(result.ok)modelDraft=false;
+  }catch(e){$('model-note').textContent=e.message||String(e);}
+  finally{modelBusy=false;updateModelControls();await refresh();}
+}
+
 function renderActivity(items, run) {
   const box = $('act');
   box.innerHTML = '';
@@ -428,7 +482,7 @@ function renderActivity(items, run) {
     box.innerHTML = '<div class="empty">暂时没有可显示的活动。发起一轮对话后这里会出现。</div>';
     return;
   }
-  items.forEach(a => {
+  [...items].reverse().forEach(a => {
     const row = document.createElement('div');
     row.className = 'row ' + (a.level === 'warn' ? 'warn' : a.level === 'error' ? 'error' : '');
     const t = document.createElement('span'); t.className = 't'; t.textContent = a.ts;
@@ -446,7 +500,7 @@ function renderLog(lines) {
     box.innerHTML = '<div class="empty">—</div>';
     return;
   }
-  lines.forEach(l => {
+  [...lines].reverse().forEach(l => {
     const row = document.createElement('div');
     row.className = 'row';
     const m = document.createElement('span'); m.className = 'm'; m.textContent = l;
@@ -458,8 +512,8 @@ function renderLog(lines) {
 async function refresh() {
   try {
     const s = await window.pywebview.api.get_status();
-    setRing(s.services.filter(x => x.up).length, s.services.length);
-    const up = s.services.filter(x => x.up).length;
+    setRing(s.services.filter(x => x.up&&!x.paused).length, s.services.filter(x=>!x.paused).length);
+    const up = s.services.filter(x => x.up||x.paused).length;
     const total = s.services.length;
     const v = $('verdict');
     if (s.allUp) {
