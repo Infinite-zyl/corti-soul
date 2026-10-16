@@ -10,10 +10,10 @@
     "base": "#A855F7",
     "accent": "#EC4899"
   },
-  "version": "2.9.0",
+  "version": "2.10.0",
   "version_tuple": [
     2,
-    9,
+    10,
     0,
     0
   ],

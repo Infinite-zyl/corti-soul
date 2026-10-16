@@ -14,13 +14,13 @@ from concurrent.futures import ThreadPoolExecutor
 from owned_process import ChildJob
 
 LANES = {'server': '游戏服务器', 'client': '观察者客户端', 'player': '玩家客户端'}
-# Reserved adapters keep the launcher API stable without guessing DST lifecycle semantics.
-ADAPTERS = {'minecraft': {'provider':'world:minecraft','panel':'mount'}, 'dst': None}
+ADAPTERS = {'minecraft': {'provider':'world:minecraft','panel':'mount'}}
 
 
 class GameControls:
-    def __init__(self, repo, console_url, log, request=None):
+    def __init__(self, repo, console_url, log, request=None, cortico_root=None):
         self.repo = pathlib.Path(repo).resolve()
+        self.cortico_root = pathlib.Path(cortico_root).resolve() if cortico_root else self.repo.parent / 'cortico-qq'
         self.console = console_url.rstrip('/')
         self.log = log
         self.request = request or self._request
@@ -38,8 +38,7 @@ class GameControls:
 
     def _initial(self):
         return {'games': [{'id': 'minecraft', 'name': 'Minecraft', 'available': True,
-            'lanes': [{'id': k, 'name': v, 'phase': 'unknown', 'detail': '正在读取状态', 'up': False} for k,v in LANES.items()]},
-            {'id': 'dst', 'name': '饥荒联机版', 'available': False, 'detail': '接入位置已预留，当前版本暂不提供启动操作。', 'lanes': []}],
+            'lanes': [{'id': k, 'name': v, 'phase': 'unknown', 'detail': '正在读取状态', 'up': False} for k,v in LANES.items()]}],
             'viewer': {'phase': 'unknown', 'up': False, 'detail': '正在读取观看状态'}}
 
     def _request(self, url, method='GET', body=None, timeout=3, headers=None):
@@ -61,7 +60,17 @@ class GameControls:
     def _mc(self, lane, action='state'):
         if lane not in LANES or action not in ('state','start','stop'): raise ValueError('未知游戏操作')
         adapter=ADAPTERS['minecraft']
-        url = self.console + '/api/console/providers/'+urllib.parse.quote(adapter['provider'],safe='')+'/panels/'+adapter['panel']+'/' + lane + '.' + action
+        # Select from the installed framework, never replay a mutation on another route.
+        manifest = self.cortico_root / 'package.json'
+        try:
+            version = json.loads(manifest.read_text(encoding='utf-8'))['version']
+            major, minor = [int(part) for part in version.split('.')[:2]]
+        except FileNotFoundError:
+            raise RuntimeError('未找到 Cortico 版本文件，请检查启动器的运行目录。') from None
+        except (ValueError, KeyError, TypeError):
+            raise RuntimeError('无法识别 Cortico 版本，请检查 package.json。') from None
+        prefix = '/api/webui' if (major, minor) >= (0, 2) else '/api/console'
+        url = self.console + prefix+'/providers/'+urllib.parse.quote(adapter['provider'],safe='')+'/panels/'+adapter['panel']+'/' + lane + '.' + action
         # Mount state methods are POST-only, but reading them does not start a game or model.
         return self.request(url, 'POST', {'args': []}, 3 if action == 'state' else 90,
                             {'Origin': self.console})

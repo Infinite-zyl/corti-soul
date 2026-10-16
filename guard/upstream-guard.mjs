@@ -14,7 +14,12 @@ import {routingMode,assertAutoRouting} from './routing-mode.mjs';
 
 const GUARD_DIR = import.meta.dirname;
 const REPO_ROOT = path.resolve(GUARD_DIR, '..');
-const CORTICO = process.env.CORTICO_ROOT ?? path.join(REPO_ROOT, '..', 'cortico-qq');
+const selectionFile = path.join(REPO_ROOT, 'runtime-selection.json');
+const selectedRoot = !process.env.CORTICO_ROOT && fs.existsSync(selectionFile) ? JSON.parse(fs.readFileSync(selectionFile, 'utf8')).corticoRoot : null;
+if (selectedRoot !== null && (typeof selectedRoot !== 'string' || !path.isAbsolute(selectedRoot) || !fs.existsSync(path.join(selectedRoot, 'package.json')))) {
+  throw new Error('Cortico 运行目录选择文件无效，请恢复 runtime-selection.json 或使用回退脚本。');
+}
+const CORTICO = process.env.CORTICO_ROOT ?? selectedRoot ?? path.join(REPO_ROOT, '..', 'cortico-qq');
 const CFG_PATH = process.env.GUARD_CONFIG ?? path.join(GUARD_DIR, 'upstream-guard.json');
 const RUNS_DIR = path.join(CORTICO, 'deployments', process.env.DEPLOY_NAME ?? 'mybot', 'data', 'runs');
 

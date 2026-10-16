@@ -1,0 +1,2 @@
+# Patch contexts must retain LF when checked out on Windows.
+patches/*.patch text eol=lf

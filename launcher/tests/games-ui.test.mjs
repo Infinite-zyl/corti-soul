@@ -5,12 +5,12 @@ function fixture(){
  const dom=new JSDOM(readFileSync('launcher/ui/index.html','utf8'),{runScripts:'dangerously',url:'http://localhost'}),w=dom.window,d=w.document;
  w.eval(readFileSync('launcher/ui/games.js','utf8'));
  w.HTMLDialogElement.prototype.showModal=function(){this.open=true};w.HTMLDialogElement.prototype.close=function(){this.open=false};
- const data={actions:{},games:[{id:'minecraft',lanes:['server','client','player'].map(id=>({id,name:id,phase:'stopped',configured:true,up:false}))},{id:'dst',available:false}],viewer:{phase:'stopped',up:false,detail:'已关闭'}};
+ const data={actions:{},games:[{id:'minecraft',lanes:['server','client','player'].map(id=>({id,name:id,phase:'stopped',configured:true,up:false}))}],viewer:{phase:'stopped',up:false,detail:'已关闭'}};
  const calls=[];w.pywebview={api:{get_games_status:async()=>data,game_action:async(...args)=>{calls.push(args);return{ok:true,msg:'已提交'}},open_mobile_viewer:async()=>({ok:true,msg:'手机入口已打开'}),open_game_settings:async()=>({ok:true,msg:'配置已打开'})}};
  w.GamePanel.init();w.GamePanel.render(data);return{dom,w,d,data,calls};
 }
 test('游戏状态独立显示；服务器离线时不允许启动客户端；DOM更新保留焦点节点',()=>{
- const f=fixture();try{const buttons=f.d.querySelectorAll('#game-rows button');assert.equal(buttons.length,3);assert.equal(buttons[0].disabled,false);assert.equal(buttons[1].disabled,true);f.data.games[0].lanes[0].up=true;f.data.games[0].lanes[0].phase='running';f.w.GamePanel.render(f.data);assert.equal(f.d.querySelectorAll('#game-rows button')[0],buttons[0]);assert.equal(buttons[1].disabled,false);assert.match(f.d.querySelector('.game-reserved').textContent,/预留接入/);}finally{f.dom.window.close()}
+ const f=fixture();try{const buttons=f.d.querySelectorAll('#game-rows button');assert.equal(buttons.length,3);assert.equal(buttons[0].disabled,false);assert.equal(buttons[1].disabled,true);f.data.games[0].lanes[0].up=true;f.data.games[0].lanes[0].phase='running';f.w.GamePanel.render(f.data);assert.equal(f.d.querySelectorAll('#game-rows button')[0],buttons[0]);assert.equal(buttons[1].disabled,false);assert.equal(f.d.querySelector('.game-reserved'),null);}finally{f.dom.window.close()}
 });
 test('启动操作提交一次，挂起期间禁用操作，失败后恢复并保留错误',async()=>{
  const f=fixture();try{let release;f.w.pywebview.api.game_action=(...args)=>{f.calls.push(args);return new Promise(r=>release=r)};const button=f.d.querySelector('#game-rows button');button.click();button.click();await tick();assert.equal(f.calls.length,1);assert.equal(button.disabled,true);release({ok:false,msg:'控制台离线'});await tick();assert.equal(button.disabled,false);assert.match(f.d.getElementById('game-notice').textContent,/控制台离线/);}finally{f.dom.window.close()}

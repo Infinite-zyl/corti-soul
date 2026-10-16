@@ -16,6 +16,9 @@ class ControlsTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.calls=[];self.logs=[];self.block=threading.Event();self.block.set()
         self.states={key:{'phase':'stopped','reachable':False,'configured':True,'pid':None} for key in ('server','client','player')}
+        self.paths=[]
+        self.framework=Path(self.temp.name)/'framework';self.framework.mkdir()
+        (self.framework/'package.json').write_text('{"version":"0.2.1"}',encoding='utf-8')
         self.delay_once=False;self.delayed=threading.Event();self.release_state=threading.Event();self.release_state.set()
         owner=self
         class Handler(BaseHTTPRequestHandler):
@@ -25,6 +28,7 @@ class ControlsTests(unittest.TestCase):
                 if self.path=='/stop':
                     data=b'stopping';self.send_response(200);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data);return
                 lane,action=self.path.rsplit('/',1)[-1].split('.')
+                owner.paths.append(self.path)
                 owner.calls.append((lane,action))
                 if action!='state':
                     owner.block.wait(timeout=2)
@@ -35,7 +39,7 @@ class ControlsTests(unittest.TestCase):
                 self.send_response(200);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
         self.server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
         threading.Thread(target=self.server.serve_forever,daemon=True).start()
-        self.control=GameControls(self.temp.name,f'http://127.0.0.1:{self.server.server_port}',self.logs.append)
+        self.control=GameControls(self.temp.name,f'http://127.0.0.1:{self.server.server_port}',self.logs.append,cortico_root=self.framework)
         self.control._viewer_state=lambda:{'phase':'stopped','up':False,'detail':'off'}
     def tearDown(self):
         self.block.set();self.release_state.set();self.wait_idle();self.control.close();self.server.shutdown();self.server.server_close();self.temp.cleanup()
@@ -51,7 +55,7 @@ class ControlsTests(unittest.TestCase):
         begin=time.monotonic();state=self.control.snapshot();self.assertLess(time.monotonic()-begin,.1)
         self.wait_idle();state=self.control.snapshot();self.assertEqual(len(state['games'][0]['lanes']),3)
         self.assertTrue(all(action=='state' for _,action in self.calls))
-        self.assertFalse(state['games'][1]['available'])
+        self.assertEqual([g['id'] for g in state['games']],['minecraft'])
     def test_clients_require_running_server(self):
         self.assertTrue(self.control.action('minecraft','client','start')['ok']);self.wait_idle()
         self.assertFalse(self.control.cache['notice']['ok']);self.assertNotIn(('client','start'),self.calls)
@@ -59,6 +63,18 @@ class ControlsTests(unittest.TestCase):
         for action in ('start','stop'):
             self.assertTrue(self.control.action('minecraft','server',action)['ok']);self.wait_idle()
             self.assertIn(('server',action),self.calls)
+        self.assertTrue(all(p.startswith('/api/webui/') for p in self.paths))
+
+    def test_old_framework_uses_old_route_without_replaying_actions(self):
+        (self.framework/'package.json').write_text('{"version":"0.1.8"}',encoding='utf-8')
+        self.control.action('minecraft','server','start');self.wait_idle()
+        self.assertEqual(self.calls.count(('server','start')),1)
+        self.assertTrue(all(p.startswith('/api/console/') for p in self.paths))
+
+    def test_unknown_framework_fails_before_sending_any_action(self):
+        (self.framework/'package.json').write_text('{"version":"broken"}',encoding='utf-8')
+        self.control.action('minecraft','server','start');self.wait_idle()
+        self.assertFalse(self.calls);self.assertFalse(self.control.cache['notice']['ok'])
     def test_external_server_not_stopped(self):
         self.states['server'].update(reachable=True,pid=None)
         self.assertTrue(self.control._lane('server')['external'])

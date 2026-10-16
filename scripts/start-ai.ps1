@@ -12,6 +12,19 @@ $ProgressPreference = 'SilentlyContinue'
 $ROOT    = if ($env:STACK_ROOT) { $env:STACK_ROOT } else { Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
 $SNOW    = Join-Path $ROOT 'SnowLuma'
 $CORTICO = if ($env:CORTICO_ROOT) { $env:CORTICO_ROOT } else { Join-Path $ROOT 'cortico-qq' }
+$runtimeSelection = Join-Path (Split-Path $PSScriptRoot -Parent) 'runtime-selection.json'
+if (-not $env:CORTICO_ROOT -and (Test-Path -LiteralPath $runtimeSelection)) {
+    try {
+        $selectedRuntime = (Get-Content -LiteralPath $runtimeSelection -Raw | ConvertFrom-Json -ErrorAction Stop).corticoRoot
+        if (-not $selectedRuntime -or -not [IO.Path]::IsPathRooted($selectedRuntime) -or -not (Test-Path -LiteralPath (Join-Path $selectedRuntime 'package.json'))) {
+            throw '运行目录无效'
+        }
+        $CORTICO = $selectedRuntime
+    } catch {
+        Write-Host 'Cortico 运行目录选择文件无效，请恢复 runtime-selection.json 或使用回退脚本。' -ForegroundColor Red
+        exit 1
+    }
+}
 $DEPLOY  = 'mybot'
 
 $QQ_CANDIDATES = @(

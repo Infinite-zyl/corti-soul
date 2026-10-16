@@ -103,7 +103,8 @@ def _find_pkg() -> pathlib.Path:
 BASE = _resolve_base()
 PKG = _find_pkg()
 SNOW = BASE / "SnowLuma"
-CORTICO = BASE / "cortico-qq"
+from runtime_paths import active_runtime
+CORTICO = active_runtime(PKG, BASE)
 RUNS = CORTICO / "deployments" / DEPLOY / "data" / "runs"
 DEPLOY_ENV = CORTICO / "deployments" / DEPLOY / ".env"
 GUARD_DIR = PKG / "guard"
@@ -407,7 +408,7 @@ class Api:
         self._model_routing = ModelRouting(GUARD_DIR / 'routing-mode.json', CONSOLE_URL,
                                            lambda: self.stop_service('guard'), lambda: self.start_service('guard'))
         self._log("启动器就绪。")
-        self._games = GameControls(PKG, CONSOLE_URL, self._log)
+        self._games = GameControls(PKG, CONSOLE_URL, self._log, cortico_root=CORTICO)
 
     # ---- 基础设施 ---------------------------------------------------------- #
     def attach(self, window) -> None:

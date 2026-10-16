@@ -24,7 +24,9 @@ import webbrowser
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent.parent
 RUN = ROOT / '.runtime'
-DEPLOY = REPO.parent / 'cortico-qq/deployments/mybot/config.json'
+sys.path.insert(0, str(REPO / 'launcher'))
+from runtime_paths import active_runtime
+DEPLOY = active_runtime(REPO, REPO.parent) / 'deployments/mybot/config.json'
 PORT, LOCAL, WHIP, ICE = 7898, 7899, 8899, 8199
 FLAGS = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
@@ -293,7 +295,7 @@ def handler(service, local):
             if not self.allowed(): return
             path=self.path.split('?')[0]
             if path=='/status':
-                data={'service':'corti-mobile-viewer','version':'2.9.0','pid':os.getpid(),'message':service.state,'ready':service.stream_ready}
+                data={'service':'corti-mobile-viewer','version':'2.10.0','pid':os.getpid(),'message':service.state,'ready':service.stream_ready}
                 if not local:data['stopToken']=service.remote_stop
                 else:data['owner']=getattr(service,'owner','')
                 self.reply(200,json.dumps(data,ensure_ascii=False),'application/json'); return
