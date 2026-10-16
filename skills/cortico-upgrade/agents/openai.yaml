@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cortico 可靠升级"
+  short_description: "保留旧版与人格记忆，迁移定制功能，验证后切换并提供回退入口"
+  default_prompt: "使用 $cortico-upgrade 检查当前部署并升级 Cortico，保留旧版和本地定制，完成备份、测试与可回退交付。"
