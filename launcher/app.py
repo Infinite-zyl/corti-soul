@@ -294,8 +294,9 @@ def read_json(path: pathlib.Path) -> dict:
 
 
 def list_services() -> list[dict]:
+    from gateway_health import gateway_health
     return [
-        {"id": "dsh", "name": "DSH 模型转发", "detail": "18899 · 大脑入口", "kind": "port", "arg": 18899},
+        gateway_health(CORTICO, DEPLOY),
         {"id": "qq", "name": "QQ 客户端", "detail": "QQNT", "kind": "proc", "arg": "QQ.exe"},
         {"id": "snow", "name": "SnowLuma", "detail": "5099 · WebUI / Hook", "kind": "port", "arg": 5099},
         {"id": "onebot", "name": "OneBot WS", "detail": "3001 · QQ 消息通道", "kind": "port", "arg": 3001},
@@ -306,11 +307,13 @@ def list_services() -> list[dict]:
 
 def probe_all() -> list[dict]:
     svcs = list_services()
-    results: dict[str, bool] = {}
+    results: dict[str, bool | None] = {}
     lock = threading.Lock()
 
     def work(svc: dict) -> None:
-        if svc["kind"] == "port":
+        if svc["kind"] == "gateway":
+            up = svc['up']
+        elif svc["kind"] == "port":
             up = port_open(svc["arg"])
         elif svc["kind"] == "proc":
             up = image_running(svc["arg"])
@@ -325,7 +328,7 @@ def probe_all() -> list[dict]:
     for t in threads:
         t.join(timeout=6)
     for s in svcs:
-        s["up"] = bool(results.get(s["id"], False))
+        s["up"] = results.get(s["id"], False)
     return svcs
 
 
@@ -808,10 +811,9 @@ class Api:
             node = find_node()
 
             # ① DSH 模型转发
-            if port_open(18899):
-                self._log("DSH 模型转发在线。")
-            else:
-                self._log("警告：DSH 模型转发 (18899) 不在线，Bot 暂时没有大脑。")
+            from gateway_health import gateway_health
+            gateway = gateway_health(CORTICO, DEPLOY)
+            self._log(('模型转发：' if gateway['up'] is not False else '警告：模型转发入口不可连接：') + gateway['detail'])
 
             # ② QQ 客户端
             if image_running("QQ.exe"):

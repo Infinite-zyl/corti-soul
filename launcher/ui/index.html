@@ -401,7 +401,7 @@ function renderServices(list) {
     el.querySelector('.txt b').textContent = s.name;
     el.querySelector('.txt i').textContent = s.detail;
     const st = el.querySelector('.st');
-    st.textContent = action === 'stopping' ? '停止中' : action === 'starting' ? '启动中' : s.paused ? '已暂停' : s.up ? '在线' : '离线';
+    st.textContent = action === 'stopping' ? '停止中' : action === 'starting' ? '启动中' : s.paused ? '已暂停' : s.up === null ? '未探测' : s.up ? '在线' : '离线';
     const control = el.querySelector('.service-action');
     if (control) {
       control.className = 'service-action ' + (action ? 'pending' : s.up ? 'stop' : 'start');
