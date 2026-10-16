@@ -2,6 +2,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 const root=JSON.parse(fs.readFileSync(new URL('../runtime-selection.json',import.meta.url),'utf8')).corticoRoot;
+const world=path.join(root,'extensions/node_modules/cortico-world-qq-better-alont1/src/world.ts');
+if(fs.existsSync(world)&&fs.readFileSync(world,'utf8').includes('endpoint = route.endpoint; model = route.model; apiKeySecret = route.secret;')){
+ console.log('已安装统一主模型路由；QQ请求实时跟随activeProvider，无需再修独立模型字段。');process.exit(0);
+}
 const file=path.join(root,'deployments/mybot/config.json');
 const original=fs.readFileSync(file,'utf8'),config=JSON.parse(original);
 const providers=path.join(root,'deployments/providers');

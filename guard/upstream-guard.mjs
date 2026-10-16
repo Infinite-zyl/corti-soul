@@ -9,7 +9,6 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { syncAuxiliaryModels as syncAuxiliaryConfig } from './auxiliary-models.mjs';
 import {routingMode,assertAutoRouting} from './routing-mode.mjs';
 
 const GUARD_DIR = import.meta.dirname;
@@ -26,12 +25,11 @@ const RUNS_DIR = path.join(CORTICO, 'deployments', process.env.DEPLOY_NAME ?? 'm
 const DEFAULTS = {
   corticoUrl: 'http://127.0.0.1:7788',
   freeProviders: [
-    { name: 'DSH_free_dots-3-note', lane: 'kilo', sideModel: 'dots-studio/dots-3-note-preview:free' },
+    { name: 'DSH_free_dots-3-note', lane: 'kilo' },
     {
       name: 'DSH_free_zen-mimo-v26-flash',
       lane: 'zen',
       model: 'mimo-v2.6-flash-free',
-      sideModel: 'mimo-v2.6-flash-free',
       copyFrom: 'DSH_free_dots-3-note',
     },
   ],
@@ -87,8 +85,6 @@ const cfg = loadConfig();
 const state = loadState();
 const cursors = new Map();
 let stopping = false;
-let nextAuxiliarySyncAt = 0;
-let auxiliaryProvider = null;
 
 function loadState() {
   try {
@@ -144,27 +140,9 @@ async function activate(name) {
   if (!res.ok) throw new Error(`activate ${name} HTTP ${res.status}: ${body.slice(0, 120)}`);
 }
 
-/** Keep the QQ/gaming side-calls on the same currently selected free lane. */
-async function syncAuxiliaryModels(model) {
-  await syncAuxiliaryConfig(api, model, log);
-}
-
-async function reconcileAuxiliaryModels(active) {
-  const provider = cfg.freeProviders.find((item) => item.name === active);
-  if (!provider?.sideModel) return;
-  if (auxiliaryProvider === active && Date.now() < nextAuxiliarySyncAt) return;
-  auxiliaryProvider = active;
-  nextAuxiliarySyncAt = Date.now() + 60_000;
-  try { await syncAuxiliaryModels(provider.sideModel); }
-  catch (e) { log(`侧调用同步失败，60 秒后重试: ${String(e.message).slice(0, 220)}`); }
-}
-
+// Auxiliary requests resolve activeProvider at dispatch; never rewrite independent model names.
 async function activateFreeProvider(provider) {
   await activate(provider.name);
-  if (provider.sideModel) {
-    try { await syncAuxiliaryModels(provider.sideModel); }
-    catch (e) { log(`主端点已切换，但侧调用同步失败: ${String(e.message).slice(0, 100)}`); }
-  }
 }
 
 async function provisionFreeProviders() {
@@ -399,7 +377,6 @@ try {
   if (state.managedCurrent !== state.current) state.managedCurrent = null;
   if (!cfg.freeProviders.some((provider) => provider.name === state.current) && state.current !== cfg.paidFallback)
     log(`配置提示：当前端点 ${state.current} 不在 freeProviders 中，免费池轮换不会接管此端点。`);
-  if(routingMode()==='auto')await reconcileAuxiliaryModels(state.current);
   if (!state.day) { state.day = todayShanghai(); state.paidSwitches = 0; }
   seedLogCursors();
   saveState();
@@ -423,7 +400,6 @@ while (!stopping) {
     const active = await getActive();
     if (state.current !== active && state.managedCurrent !== active) state.managedCurrent = null;
     state.current = active;
-    await reconcileAuxiliaryModels(active);
     await pollRunLogs();
     await recoverHigherPriorityLane();
   } catch (e) { log(`轮询异常: ${String(e.message).slice(0, 120)}`); }
