@@ -136,16 +136,30 @@
   }
   .chip.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,transparent)}
   .chip.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,transparent)}
-  .model-routing{display:flex;align-items:end;gap:10px;flex-wrap:wrap;margin-top:10px}
-  .model-routing label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--dim)}
-  .model-routing select,.model-routing button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-height:36px}
-  .model-routing select{max-width:420px;min-width:140px}
-  .model-routing option{background:#201b29;color:#f6f1fc}
-  .model-routing :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-  .model-routing :disabled{opacity:.5;cursor:not-allowed}
-  .model-routing button{cursor:pointer}
-  .model-routing button:hover:not(:disabled){background:var(--panel2)}
-  .model-mode-note{font-size:12px;color:var(--dim);margin-top:7px;line-height:1.5}
+  #model-settings{border-bottom:1px solid var(--line);padding:0 0 18px;min-width:0}
+  .model-routing{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  .model-routing h2{font-size:14px;margin:0;font-weight:600}
+  .model-strategy{display:flex;gap:3px;padding:3px;background:var(--panel);border:1px solid var(--line);border-radius:9px}
+  .model-strategy label{position:relative;cursor:pointer}
+  .model-strategy input{position:absolute;opacity:0;width:1px;height:1px}
+  .model-strategy span{display:block;padding:6px 16px;border-radius:6px;font-size:12px;color:var(--dim)}
+  .model-strategy input:checked+span{background:color-mix(in srgb,var(--base) 22%,var(--panel));color:var(--ink)}
+  #model-settings :focus-visible,.model-strategy input:focus-visible+span{outline:2px solid var(--accent);outline-offset:3px}
+  #model-settings button,#model-settings select{font:inherit;font-size:12px;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;min-height:36px;padding:7px 12px}
+  #model-settings button{cursor:pointer;flex-shrink:0}
+  #model-settings button:hover:not(:disabled){background:var(--panel2)}
+  #model-settings :disabled{opacity:.5;cursor:not-allowed}
+  #model-settings option{background:#201b29;color:#f6f1fc}
+  .model-description{font-size:12px;color:var(--dim);margin:10px 0;line-height:1.6}
+  .model-manual{display:flex;align-items:end;gap:8px;margin:12px 0}
+  .model-manual[hidden]{display:none}
+  .model-manual label{flex:1;min-width:0;font-size:11px;color:var(--dim)}
+  #model-choice{display:block;width:100%;min-width:0;margin-top:5px;text-overflow:ellipsis}
+  .model-footer{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .model-mode-note{font-size:11px;color:var(--dim);line-height:1.6;flex:1;min-width:180px}
+  .model-mode-note.error{color:var(--bad)}
+  .model-mode-note.success{color:var(--ok)}
+  #model-apply{border-color:color-mix(in srgb,var(--base) 55%,var(--line));background:color-mix(in srgb,var(--base) 15%,var(--panel))}
 
   /* ---------- 服务卡 ---------- */
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(184px,1fr));gap:10px}
@@ -298,12 +312,22 @@
       </div>
       <div id="model-settings">
         <div class="model-routing">
-          <label>切换方式<select id="model-mode"><option value="auto">自动切换</option><option value="manual">手动固定</option></select></label>
-          <label>主模型端点<select id="model-choice" disabled><option value="">先刷新模型列表</option></select></label>
-          <button id="model-refresh" type="button" onclick="loadModelOptions()">刷新模型列表</button>
-          <button id="model-apply" type="button" onclick="applyModelMode()">应用</button>
+          <h2>模型切换</h2>
+          <div class="model-strategy" role="group" aria-label="切换策略">
+            <label><input id="mode-auto" type="radio" name="model-mode" value="auto" checked><span>自动切换</span></label>
+            <label><input id="mode-manual" type="radio" name="model-mode" value="manual"><span>手动固定</span></label>
+          </div>
         </div>
-        <div class="model-mode-note" id="model-note" role="status" aria-live="polite">自动：沿用现有故障切换。手动：固定主模型，限流只报错，不自动换线路。</div>
+        <p class="model-description" id="model-description">遇到故障时由守护切换渠道；QQ 与游戏跟随当前主模型。</p>
+        <div class="model-manual" id="model-manual" hidden>
+          <label>固定使用的模型<select id="model-choice" aria-describedby="model-note"><option value="">正在准备模型列表…</option></select></label>
+          <button id="model-refresh" type="button" onclick="loadModelOptions()" title="重新读取已配置的模型，不调用模型">刷新列表</button>
+        </div>
+        <div class="model-footer">
+          <div class="model-mode-note" id="model-note" role="status" aria-live="polite">当前设置已生效。</div>
+          <button id="model-cancel" type="button" onclick="cancelModelDraft()" hidden>撤销</button>
+          <button id="model-apply" type="button" onclick="applyModelMode()" disabled>已启用自动切换</button>
+        </div>
       </div>
 
       <div id="stack-status">
@@ -436,14 +460,16 @@ function renderServices(list) {
 
 function renderProvider(p) {
   if(p.routing?.error)$('model-note').textContent=p.routing.error;
-  if(!modelDraft&&!modelBusy)$('model-mode').value=p.routing?.mode||'auto';
-  if(!modelDraft&&!modelBusy&&p.routing?.provider&&Array.from($('model-choice').options).some(o=>o.value===p.routing.provider))$('model-choice').value=p.routing.provider;
+  modelApplied={mode:p.routing?.mode||'auto',provider:p.active||p.routing?.provider||''};
+  if(!modelDraft&&!modelBusy)$('mode-'+modelApplied.mode).checked=true;
+  if(!modelDraft&&!modelBusy&&Array.from($('model-choice').options).some(o=>o.value===modelApplied.provider))$('model-choice').value=modelApplied.provider;
   updateModelControls();
+  if(chosenMode()==='manual'&&!modelOptionsLoaded&&!modelBusy)void loadModelOptions();
   $('p-active').textContent = p.active || '未知（守护未运行或控制台未响应）';
   const chips = [];
   if (p.active && p.primary && p.active === p.primary) chips.push(['主用 · 免费池', 'ok']);
   else if (p.active && p.fallback && p.active === p.fallback) chips.push(['已切备用 · 渠道网关', 'warn']);
-  chips.push([(p.switches || 0) + '/' + (p.maxSwitches || 12) + ' 今日切换', '']);
+  chips.push([p.switches==null||p.maxSwitches==null?'备用切换统计暂不可用':`今日切入备用 ${p.switches}/${p.maxSwitches}`, '']);
   chips.push([p.routing?.mode==='manual'?'手动固定 · 不自动换线':'自动切换','']);
   const box = $('p-chips');
   box.innerHTML = '';
@@ -455,33 +481,41 @@ function renderProvider(p) {
   });
 }
 
-let modelBusy=false,modelDraft=false;
+let modelBusy=false,modelDraft=false,modelOptionsLoaded=false,modelApplied={mode:'auto',provider:''};
+const chosenMode=()=>document.querySelector('input[name="model-mode"]:checked').value;
+function modelNote(text,state=''){$('model-note').textContent=text;$('model-note').className='model-mode-note '+state;}
 function updateModelControls(){
-  $('model-mode').disabled=modelBusy;
-  $('model-choice').disabled=modelBusy||$('model-mode').value!=='manual';
+  const manual=chosenMode()==='manual';
+  document.querySelectorAll('input[name="model-mode"]').forEach(el=>el.disabled=modelBusy);
+  $('model-manual').hidden=!manual;
+  $('model-description').textContent=manual?'固定此模型；限流或故障时只报错，不自动更换。QQ 与游戏一起跟随。':'遇到故障时由守护切换渠道；QQ 与游戏跟随当前主模型。';
+  $('model-choice').disabled=modelBusy||!manual;
   $('model-refresh').disabled=modelBusy;
-  $('model-apply').disabled=modelBusy||($('model-mode').value==='manual'&&!$('model-choice').value);
+  $('model-apply').disabled=modelBusy||!modelDraft||(manual&&!$('model-choice').value);
+  $('model-apply').textContent=modelBusy?'处理中…':modelDraft?(manual?'固定此模型':'启用自动切换'):(manual?'已固定模型':'已启用自动切换');
+  $('model-cancel').hidden=!modelDraft;$('model-cancel').disabled=modelBusy;
 }
-$('model-mode').addEventListener('change',()=>{modelDraft=true;updateModelControls();if($('model-mode').value==='manual'&&!$('model-choice').value)void loadModelOptions();});
-$('model-choice').addEventListener('change',()=>{modelDraft=true;updateModelControls();});
+document.querySelectorAll('input[name="model-mode"]').forEach(el=>el.addEventListener('change',()=>{modelDraft=chosenMode()!==modelApplied.mode||(chosenMode()==='manual'&&$('model-choice').value!==modelApplied.provider);modelNote(modelDraft?'尚未应用，请确认后保存。':'当前设置已生效。');updateModelControls();if(chosenMode()==='manual')void loadModelOptions();}));
+$('model-choice').addEventListener('change',()=>{modelDraft=chosenMode()!==modelApplied.mode||$('model-choice').value!==modelApplied.provider;modelNote(modelDraft?'尚未应用，请确认后保存。':'当前设置已生效。');updateModelControls();});
+function cancelModelDraft(){modelDraft=false;$('mode-'+modelApplied.mode).checked=true;if(Array.from($('model-choice').options).some(o=>o.value===modelApplied.provider))$('model-choice').value=modelApplied.provider;modelNote('已撤销未保存的修改。');updateModelControls();}
 async function loadModelOptions(){
-  if(modelBusy)return;modelBusy=true;updateModelControls();$('model-note').textContent='读取已配置模型端点…';
+  if(modelBusy)return;modelBusy=true;modelOptionsLoaded=true;updateModelControls();modelNote('正在读取已配置的模型…');
   try{
     const result=await window.pywebview.api.get_model_options();if(!result.ok)throw Error(result.msg||'读取失败');
     const selected=$('model-choice').value||result.routing?.provider||result.active;
     $('model-choice').replaceChildren();
     for(const p of result.providers){const option=document.createElement('option');option.value=p.id;option.textContent=p.name+' · '+p.model;$('model-choice').append(option);}
     if(result.providers.some(p=>p.id===selected))$('model-choice').value=selected;
-    $('model-note').textContent=result.providers.length?'列表来自 Cortico 已配置端点；读取列表不调用模型。':'没有已配置的模型，请先在 Cortico 控制台添加端点。';
-  }catch(e){$('model-note').textContent=e.message||String(e);}
+    modelNote(result.providers.length?(modelDraft?'尚未应用，请确认模型后保存。':'当前设置已生效。'):'没有已配置的模型，请先在 Cortico 控制台添加。');
+  }catch(e){modelNote(e.message||String(e),'error');}
   finally{modelBusy=false;updateModelControls();}
 }
 async function applyModelMode(){
-  if(modelBusy)return;modelBusy=true;updateModelControls();$('model-note').textContent='正在应用切换方式…';
+  if(modelBusy||!modelDraft)return;modelBusy=true;updateModelControls();modelNote('正在保存切换设置…');
   try{
-    const result=await window.pywebview.api.set_model_mode($('model-mode').value,$('model-choice').value);
-    $('model-note').textContent=result.msg||'操作已结束';if(result.ok)modelDraft=false;
-  }catch(e){$('model-note').textContent=e.message||String(e);}
+    const result=await window.pywebview.api.set_model_mode(chosenMode(),$('model-choice').value);
+    modelNote(result.msg||'操作已结束',result.ok?'success':'error');if(result.ok)modelDraft=false;
+  }catch(e){modelNote(e.message||String(e),'error');}
   finally{modelBusy=false;updateModelControls();await refresh();}
 }
 

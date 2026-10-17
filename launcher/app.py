@@ -1,7 +1,7 @@
 """corti-soul 启动器 — 人格启动器（Python 宿主 + WebView2 界面）。
 
 管理本机常驻的这条链路：
-    DSH 模型转发(18899) → QQ 客户端 → SnowLuma(5099) → OneBot WS(3001)
+    当前模型转发 → QQ 客户端 → SnowLuma(5099) → OneBot WS(3001)
     → Cortico 控制台(7788) → 免费池守护(upstream-guard)
 
 界面用 HTML/CSS/JS 写，Python 只负责窗口、托盘、进程与端口探测。
@@ -765,10 +765,10 @@ class Api:
             "active": guard_state.get("current", ""),
             "primary": guard_cfg.get("primary", ""),
             "fallback": guard_cfg.get("fallback", ""),
-            "switches": guard_state.get("fallbackSwitches", 0),
-            "maxSwitches": guard_cfg.get("maxFallbackSwitchesPerDay", 12),
             "probeEvery": guard_cfg.get("probeIntervalSec", 60),
         }
+        from guard_status import fallback_usage
+        provider.update(fallback_usage(guard_state, guard_cfg))
         active = active_provider()
         for service in svcs:
             service['paused'] = service['id'] == 'guard' and provider['routing']['mode'] == 'manual'
@@ -968,6 +968,16 @@ def build_tray(api: Api):
 # 入口
 # --------------------------------------------------------------------------- #
 def main() -> None:
+    from single_instance import SingleInstance
+    instance = SingleInstance(WINDOW_TITLE)
+    try:
+        if instance.acquire():
+            _run_launcher()
+    finally:
+        instance.close()
+
+
+def _run_launcher() -> None:
     # 只有直接点中这些元素才拖窗，避免按钮被当成拖拽把手。
     webview.settings["DRAG_REGION_SELECTOR"] = ".titlebar, .titlebar .grow, .titlebar b, .titlebar .tag, .titlebar .orb"
     webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True

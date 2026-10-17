@@ -10,11 +10,11 @@
     "base": "#A855F7",
     "accent": "#EC4899"
   },
-  "version": "2.10.2",
+  "version": "2.10.3",
   "version_tuple": [
     2,
     10,
-    2,
+    3,
     0
   ],
   "company": "corti-soul",
