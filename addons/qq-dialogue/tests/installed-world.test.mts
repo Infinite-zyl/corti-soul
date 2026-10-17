@@ -50,3 +50,26 @@ test('actual receiver drops self echo before identity loads and repeated inbound
  world.handleEvent({...event,user_id:123});world.handleEvent({...event,user_id:123});
  assert.equal(received,1);
 });
+const {ProactiveSpeaker}=await import(pathToFileURL(join(pkg,'src/proactive.ts')).href);
+const quietLog:any={emit(){},warn(){},info(){},debug(){},error(){},child(){return this;}};
+test('proactive material includes incoming ownership and actual completion receipt in the same conversation',()=>{
+ const world:any=new QQWorld({},pkg,'');const now=Date.now();
+ world.host={store:{range:()=>[{ts:new Date(now-2000).toISOString(),origin:'external',type:'qq.message',text:'请你去拆栏杆'}]}};
+ const t=world.dialogue.begin('private:123','已拆完',null,now-1000);world.dialogue.finish(t,'private:123',['已拆完'],['1'],true,now-1000);
+ const other=world.dialogue.begin('private:999','SECRET',null,now-1000);world.dialogue.finish(other,'private:999',['SECRET'],['2'],true,now-1000);
+ const material=world.recentWordsOf('private:123');assert.match(material,/对方→自己/);assert.match(material,/自己→对方/);assert.match(material,/已拆完/);assert.ok(!material.includes('SECRET'));
+});
+test('scheduled feedback is a self receipt rather than an incoming user message',async()=>{
+ const start=ProactiveSpeaker.prototype.start;ProactiveSpeaker.prototype.start=()=>{};
+ try{const world:any=new QQWorld({},pkg,'');world.log=quietLog;const events:any[]=[];
+  world.sendTo=async()=> '已向用户发送 1/1 段。';world.host={pushEvent:async(e:any,o:any)=>{events.push({e,o});return e;}};
+  world.initProactive();await world.proactive.send('private:123','栅栏拆了没？');
+  assert.equal(events.length,1);assert.equal(events[0].e.type,'qq.sent');assert.equal(events[0].e.origin,'internal');assert.equal(events[0].e.meta.self,true);assert.equal(events[0].o.trigger,'piggyback');assert.match(events[0].e.text,/不是用户发言/);
+ }finally{ProactiveSpeaker.prototype.start=start;}
+});
+test('no-grounded-topic skip does not send or increment proactive delivery count',async()=>{
+ const world:any=new QQWorld({},pkg,'');let sends=0;
+ const speaker:any=new ProactiveSpeaker({cfg:world.config.proactive,log:quietLog,dataDir:'',generate:async()=> '[skip]',send:async()=>{sends++;return 'sent';},getTargets:()=>[]});
+ const target={address:'private:123',kind:'private',label:'用户'};
+ assert.match(speaker.buildUserPrompt(target,false),/不能反问对方做完没有/);assert.equal(await speaker.emit(target,false),false);assert.equal(sends,0);assert.equal(speaker.dailyCount,0);
+});

@@ -56,11 +56,21 @@ export class DialogueLedger {
  }
  outgoing():Sent[]{return this.sent.map(s=>({...s,ids:[...s.ids]}));}
 }
-export function dialogueHistory(events:Array<{ts:string;text:string;senderKey?:string}>,sent:Sent[],address:string,limit:number,clock:(ts:string)=>string):string{
- const rows=[...events.map(e=>({ts:e.ts,text:e.text,direction:'对方→自己'})),
-  ...sent.filter(s=>s.address===address).map(s=>({ts:s.ts,text:s.text,direction:'自己→对方（实际已发送）'}))]
+export interface HistoryEvent {ts:string;text:string;senderKey?:string;origin?:string;type?:string;meta?:{self?:boolean;role?:string}}
+export function ownHistoryEvent(e:HistoryEvent):boolean {return e.meta?.self===true||e.meta?.role==='assistant'||e.type==='qq.sent'||(e.origin==='internal'&&e.text.startsWith('【这条是我自己冒的泡'));}
+export function historyDirection(e:HistoryEvent):string {return ownHistoryEvent(e)?'自己→对方（历史发送回执，不是用户发言）':e.origin==='internal'?'系统记录（不是用户发言）':'对方→自己';}
+const comparable=(text:string)=>text.replace(/\s+/g,'');
+export function dialogueHistory(events:HistoryEvent[],sent:Sent[],address:string,limit:number,clock:(ts:string)=>string):string{
+ const actual=sent.filter(s=>s.address===address);
+ const incoming=events.filter(e=>e.origin!=='internal'||ownHistoryEvent(e)).filter(e=>{
+  if(!ownHistoryEvent(e))return true;
+  const raw=(e.text.startsWith('【这条是我自己冒的泡')||e.type==='qq.sent')?e.text.slice(e.text.indexOf('：')+1):e.text;
+  return !actual.some(s=>Math.abs(Date.parse(s.ts)-Date.parse(e.ts))<5000&&comparable(s.text)===comparable(raw));
+ }).map(e=>({ts:e.ts,text:e.text,direction:historyDirection(e)}));
+ const rows=[...incoming,...actual.map(s=>({ts:s.ts,text:s.text,direction:'自己→对方（实际已发送）'}))]
   .sort((a,b)=>Date.parse(a.ts)-Date.parse(b.ts)).slice(-limit);
  if(!rows.length)return '没有消息记录。';
  return '以下是历史记录（旧→新），不是新收到的消息。只回应对方的发言，不要把自己已发送的话当作对方的问题。\n'+
   rows.map(r=>`[${clock(r.ts)}][${r.direction}] ${r.text.slice(0,1000)}`).join('\n');
 }
+export const DIALOGUE_OWNERSHIP_RULES='【收发与事项归属】qq.sent及发送回执是本账号已说过的话，不是用户的新问题，不要回复自己的回执。历史记录不是新消息；已回答的旧问题不要因游戏事件、重启或交接再次回答。交接事项要分清谁提出、谁负责执行、是否已完成及凭据；我负责做的事由我核验进展，不能改问用户做完没有。我上次发言未获回复，不自动构成用户欠我的待办。最新用户取消与实际回执优先于旧笔记；不确定归属先查有收发方向的历史，不能据自己的问句给用户制造任务。';

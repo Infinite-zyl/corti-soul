@@ -58,3 +58,13 @@ test('history distinguishes own speech, sorts chronologically, isolates conversa
  assert.match(s,/历史记录/);assert.match(s,/自己→对方（实际已发送）/);assert.match(s,/对方→自己/);
  assert.ok(s.indexOf('go?')<s.indexOf('yes'));assert.ok(!s.includes('SECRET'));
 });
+
+test('legacy scheduled messages cannot be relabelled as received user questions',()=>{
+ const ts=new Date(at).toISOString();const out=dialogueHistory([{ts,text:'【这条是我自己冒的泡，不是你写的】[21:35 发给 对方]：栅栏拆了没？',origin:'internal',type:'qq.message',meta:{self:true,role:'assistant'}}],[],'private:1',10,x=>x);
+ assert.match(out,/自己→对方/);assert.ok(!out.includes('[对方→自己]'));assert.match(out,/栅栏拆了没/);
+});
+test('scheduled receipt and transport ledger deduplicate; internal notices never become user speech',()=>{
+ const ts=new Date(at).toISOString(),body='我负责拆栏杆，已经拆完。';
+ const out=dialogueHistory([{ts,text:'【本账号已发送的回执；不是用户发言】[21:35 发给 对方]：'+body,origin:'internal',type:'qq.sent',meta:{self:true}},{ts,text:'internal noise',origin:'internal'}],[{ts,text:body,address:'private:1',ids:['1']}],'private:1',10,x=>x);
+ assert.equal(out.split(body).length-1,1);assert.ok(!out.includes('internal noise'));assert.ok(!out.includes('[对方→自己]'));
+});
