@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "corti_observer",
+  "version": "${version}",
+  "name": "corti Observer",
+  "description": "Local read-only corti task HUD and actual spectator hands, with no model calls.",
+  "environment": "client",
+  "entrypoints": {"client": ["local.cortisoul.observer.CortiObserver"]},
+  "mixins": ["corti-observer.mixins.json"],
+  "license": "GPL-3.0-only",
+  "depends": {"fabricloader": ">=0.16.14", "minecraft": "1.20.6", "java": ">=21"}
+}

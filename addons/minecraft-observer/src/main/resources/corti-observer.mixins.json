@@ -1,0 +1,7 @@
+{
+  "required": true,
+  "package": "local.cortisoul.observer.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["GuiMixin", "HandAccessor", "HandMixin", "GameRendererMixin", "IrisHandMixin"],
+  "injectors": {"defaultRequire": 1}
+}
