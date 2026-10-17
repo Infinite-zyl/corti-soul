@@ -12,7 +12,7 @@ function armorPoints(slots:any){
  for(let i=0;i<4;i++){const name=slots[5+i]?.name;if(!name)continue;if(i===0&&name==='turtle_helmet'){sum+=2;continue;}const material=name.slice(0,-pieces[i].length-1);if(name!==material+'_'+pieces[i]||!points[material])return null;sum+=points[material][i];}
  return sum;
 }
-export function observerSnapshot(input:{bot:any;online:boolean;target:string;observer:string;queue:any;last:any;now?:number}){
+export function observerSnapshot(input:{bot:any;online:boolean;target:string;observer:string;queue:any;last:any;life?:any;now?:number}){
  const {bot,queue:q={},last,online}=input,now=input.now??Date.now();
  const running=online?q?.running:null,hold=online?q?.hold:null;
  let phase=online?'idle':'offline';
@@ -22,6 +22,7 @@ export function observerSnapshot(input:{bot:any;online:boolean;target:string;obs
  else if(online&&q?.waiting?.length)phase='queued';
  const p=online?bot?.entity?.position:null;
  return{version:1,at:now,online,target:clean(input.target,32),observer:clean(input.observer,32),
+  life:online&&input.life?{target:clean(input.life.target,80),state:input.life.paused?'paused':clean(input.life.state,24),reason:input.life.paused?'模型接续暂缓':clean(input.life.reason,100),next:clean(input.life.next,100),nextReviewAt:input.life.paused?null:number(input.life.nextReviewAt),attempts:number(input.life.attempts)}:null,
   uuid:online?clean(bot?.entity?.uuid,64):'',phase,hold:clean(hold),
   health:online?number(bot?.health):null,food:online?number(bot?.food):null,
   experience:online?{level:number(bot?.experience?.level),progress:number(bot?.experience?.progress)}:null,

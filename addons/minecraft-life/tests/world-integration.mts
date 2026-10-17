@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {pathToFileURL} from 'node:url';
+const repo=path.resolve(import.meta.dirname,'../../..'),runtime=JSON.parse(fs.readFileSync(path.join(repo,'runtime-selection.json'),'utf8')).corticoRoot;
+const load=(n:string)=>import(pathToFileURL(path.join(runtime,'src/worlds/minecraft',n)).href);
+const {MinecraftWorld}=await load('world.ts'),{MinecraftWorldProxy}=await load('proxy.ts'),{MINECRAFT_DEFAULTS}=await load('config.ts');
+const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'life-world-'));
+try{
+ const cfg=structuredClone(MINECRAFT_DEFAULTS);cfg.local.serverDir='';let block:any=null;
+ const bot={game:{dimension:'minecraft:overworld'},entity:{position:{x:1,y:64,z:1}},time:{timeOfDay:1000},players:{},blockAt:()=>block};
+ const w:any=new MinecraftWorld({cfg,dataDir:path.join(tmp,'data')}),events:any[]=[];
+ w.bridge={connected:true,bot};w.executor={status:()=>({running:null,waiting:[],hold:null})};w.reportWorldDelta=()=>{};
+ w.host={log:{emit(){},info(){},debug(){},warn(){},error(){}},pushEvent:async(e:any)=>{events.push(e);return e;},pushDeferred(){}};
+ const realm=w.realmKey(),tool=w.tools().find((t:any)=>t.name==='mc_project');
+ const base={action:'save',id:'farm',name:'农场',stage:'生长',next:'核验后收获',evidence:'观察到作物',status:'waiting',reason:'等成熟',wait:{kind:'crop',at:[1,64,1],dimension:'minecraft:overworld'}};
+ assert.match(String(await tool.handler(base)),/失败/);
+ block={name:'wheat',getProperties:()=>({age:3})};assert.doesNotMatch(String(await tool.handler(base)),/失败/);
+ w.updateLifeRuntime({at:Date.now(),busy:false,paused:false,userKeys:[]});w.lifeTick();assert.equal(w.projectBook.ledger(realm).items[0].wait.notifiedAt,undefined);
+ block=null;w.lifeScanAt=0;w.lifeTick();assert.equal(w.projectBook.ledger(realm).items[0].wait.notifiedAt,undefined);
+ block={name:'wheat',getProperties:()=>({age:7})};w.lifeScanAt=0;w.lifeTick();assert.ok(w.projectBook.ledger(realm).items[0].wait.notifiedAt);const count=events.length;w.lifeScanAt=0;w.lifeTick();assert.equal(events.length,count);
+ assert.equal(JSON.parse(await tool.handler({action:'query'})).name,'农场');
+ await tool.handler({...base,id:'fence',name:'栅栏',status:'waiting-user',reason:'等确认',wait:{kind:'user',senderKey:'Infinite'}});
+ w.updateLifeRuntime({at:Date.now(),busy:false,paused:false,userKeys:['Other']});assert.equal(w.projectBook.ledger(realm).items[1].wait.notifiedAt,undefined);
+ w.updateLifeRuntime({at:Date.now(),busy:false,paused:false,userKeys:['Infinite']});assert.equal(w.projectBook.ledger(realm).items[1].status,'waiting-user');
+ const note=w.webUi('zh').storage.find((s:any)=>s.key==='minecraft-projects').note;assert.match(note,/栅栏/);assert.match(note,/声明依据/);assert.match(note,/尚无关联执行回执/);
+ const rebuilt:any=new MinecraftWorld({cfg,dataDir:path.join(tmp,'data')});rebuilt.bridge={connected:true,bot};assert.equal(rebuilt.projectBook.ledger(rebuilt.realmKey()).items.length,2);
+ w.lifeHandoff();assert.match(events.at(-1).text,/不.*旧动作/);
+ fs.writeFileSync(path.join(tmp,'config.json'),JSON.stringify({activeProvider:'fixture'}));
+ const proxy:any=new MinecraftWorldProxy({cfg,dataDir:path.join(tmp,'data')}),casts:any[]=[];let cursor=1;
+ proxy.host={store:{latestCursor:()=>cursor,range:()=>[{source:'qqbot',type:'qq.message',origin:'external',senderKey:'private:123'}]},llmStalls:async()=>0};proxy.cast=(c:any)=>casts.push(c);
+ proxy.pushLifeRuntime();cursor++;proxy.pushLifeRuntime();assert.deepEqual(casts.at(-1).state.userKeys,['private:123']);
+ proxy.onRunPhase({state:'backoff',enteredAt:new Date().toISOString(),running:[]});proxy.pushLifeRuntime();assert.equal(casts.at(-1).state.paused,true);
+ proxy.onTurnEnded();assert.equal(casts.at(-1).kind,'life-ended');proxy.onHandoffEnded();assert.equal(casts.at(-1).kind,'life-handoff');
+ console.log('Actual World/Proxy integration passed; no start, fork, model or network.');
+}finally{fs.rmSync(tmp,{recursive:true,force:true});}

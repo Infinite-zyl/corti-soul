@@ -110,10 +110,18 @@ public final class CortiObserver implements ClientModInitializer {
                 var last=value.getAsJsonObject("last"); detail="最近 "+text(last,"kind")+" · "+text(last,"text");
             }
         }
-        graphics.fill(left,top,left+width,top+49,0xc0182029);
+        graphics.fill(left,top,left+width,top+79,0xc0182029);
         line(graphics,title,left+7,top+6,width-14,0xff75e0b6);
         line(graphics,action,left+7,top+21,width-14,0xfff1f5f9);
         line(graphics,detail,left+7,top+35,width-14,0xffc2cdd9);
+        if(camera&&valid&&value.has("life")&&value.get("life").isJsonObject()) {
+            var life=value.getAsJsonObject("life");String state=text(life,"state");
+            String status=switch(state){case "active"->"计划待接续";case "waiting"->"等待条件";case "waiting-user"->"等待用户";case "blocked"->"受阻";case "resting"->"主动休息";case "paused"->"接续暂缓";default->"尚未安排下一步";};
+            line(graphics,"目标 · "+text(life,"target"),left+7,top+49,width-14,0xfff1f5f9);
+            String reason=text(life,"reason");String review="";
+            try{long due=life.get("nextReviewAt").getAsLong();review=" · "+Math.max(0,(due-System.currentTimeMillis()+59999)/60000)+"分钟后复查";}catch(Exception ignored){}
+            line(graphics,status+(reason.isEmpty()?"":" · "+reason)+review,left+7,top+63,width-14,0xffc2cdd9);
+        }
         if (camera && valid && value.get("online").getAsBoolean()) drawHotbar(graphics,value);
     }
 

@@ -34,3 +34,9 @@ test('experience and equipped armor are real readings, missing or unknown values
  assert.equal(state({bot:{...b,inventory:{slots:{6:{name:'elytra'}}}}}).armor,null);
  assert.equal(state().experience.level,null);assert.equal(state({online:false}).armor,null);assert.equal(state({online:false}).experience,null);
 });
+
+test('life HUD is bounded, pause has no false review countdown, offline clears it',()=>{
+ const life={target:'x'.repeat(500),state:'resting',reason:'rest',next:'later',nextReviewAt:1000,attempts:2,privateHistory:'SECRET'};
+ assert.equal(state({life}).life.target.length,80);assert.ok(!JSON.stringify(state({life})).includes('SECRET'));
+ assert.equal(state({life:{...life,paused:true}}).life.state,'paused');assert.equal(state({life:{...life,paused:true}}).life.nextReviewAt,null);assert.equal(state({life,online:false}).life,null);
+});

@@ -59,5 +59,5 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--apply',action='store_true');args=parser.parse_args()
     repo=Path(__file__).resolve().parents[2]
     runtime=Path(json.loads((repo/'runtime-selection.json').read_text(encoding='utf8'))['corticoRoot'])
-    jar=Path(__file__).parent/'build/libs/corti-observer-1.0.1.jar'
+    jar=Path(__file__).parent/'build/libs/corti-observer-1.1.0.jar'
     print(json.dumps(install(repo,runtime,jar,args.apply),ensure_ascii=False))
