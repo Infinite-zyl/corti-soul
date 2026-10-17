@@ -1,4 +1,4 @@
-# corti Observer 1.0.0（corti-soul 2.11.0）
+# corti Observer 1.0.1（corti-soul 2.11.0）
 
 独立客户端模组，目标环境：Minecraft Java 1.20.6、Fabric Loader 0.16.14、Java 21。当前观察者安装有 Iris 1.7.2 / Sodium 0.5.11；兼容注入依据该 Iris jar 实际字节码核对，不能代替实际光影验收。
 
@@ -30,4 +30,6 @@ launcher\.venv\Scripts\python.exe addons/minecraft-observer/install.py --apply
 
 补丁只适配Cortico0.2.1并预检锚点，重复安装不叠加。安装器只修改观察者mods目录中本功能自己的jar及`config/corti-observer.json`，备份在仓库`backups/observer-*`；不修改服务器存档、光影或玩家配置。已有同名非本功能jar、坏配置、错误游戏版本即停止。升级Cortico或移动部署后重新适配补丁并运行安装器，更新状态文件路径。
 
-停止观察者后可移走`corti-observer-1.0.0.jar`并恢复本功能配置备份；新装前没有配置时可删除本功能配置。要撤回World发布器，停Cortico后恢复同一源码版本的`world.ts.observer.orig`，或定点移除补丁；保留其他游戏修改。不要把旧备份覆盖到未来上游版本。正常关停World会写离线读数，即使异常退出也有5秒过期保护。
+停止观察者后可移走`corti-observer-1.0.1.jar`并恢复本功能配置备份；新装前没有配置时可删除本功能配置。要撤回World发布器，停Cortico后恢复同一源码版本的`world.ts.observer.orig`，或定点移除补丁；保留其他游戏修改。不要把旧备份覆盖到未来上游版本。正常关停World会写离线读数，即使异常退出也有5秒过期保护。
+
+1.0.1修正：Iris会绕过普通GameRenderer入口直接画手，现同时接入ItemInHandRenderer共用入口，使用调用方原有缓冲，不抢先flush。底部使用游戏自带HUD贴图显示真实读数；经验从Mineflayer读取，原版装备护甲点从装备槽计算，未知数据不填造。未复制所有原版状态效果/受伤动画或NBT道具属性。实际光影画面仍需重开观察者验收。

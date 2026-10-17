@@ -117,17 +117,37 @@ public final class CortiObserver implements ClientModInitializer {
         if (camera && valid && value.get("online").getAsBoolean()) drawHotbar(graphics,value);
     }
 
+    private static void sprite(GuiGraphics g,String id,int x,int y,int w,int h) {
+        g.blitSprite(ResourceLocation.tryParse("minecraft:hud/"+id),x,y,w,h);
+    }
+    private static double decimal(JsonObject value,String key,double fallback) {
+        try { var n=value.get(key).getAsDouble();return Double.isFinite(n)?n:fallback; }catch(Exception e){return fallback;}
+    }
     private static void drawHotbar(GuiGraphics g, JsonObject value) {
-        int x=(g.guiWidth()-182)/2,y=g.guiHeight()-25,selected=integer(value,"selected",-1);
-        line(g,"生命 "+text(value,"health")+" / 20   饥饿 "+text(value,"food")+" / 20   排队 "+integer(value,"waiting",0),x,y-13,220,0xfff1f5f9);
+        var mc=Minecraft.getInstance();int x=(g.guiWidth()-182)/2,y=g.guiHeight()-22,selected=integer(value,"selected",-1);
+        com.mojang.blaze3d.systems.RenderSystem.enableBlend();
+        sprite(g,"hotbar",x,y,182,22);
+        if(selected>=0&&selected<9)sprite(g,"hotbar_selection",x-1+selected*20,y-1,24,23);
         JsonArray bar=value.getAsJsonArray("hotbar");
-        for (int i=0;i<9;i++) {
-            int bx=x+i*20;
-            g.fill(bx,y,bx+20,y+21,i==selected?0xffb4ddce:0xb0182029);
-            g.fill(bx+1,y+1,bx+19,y+20,0xd0222d38);
-            if(i<bar.size())drawItem(g,bar.get(i),bx+2,y+3);
+        for(int i=0;i<Math.min(9,bar.size());i++)drawItem(g,bar.get(i),x+3+i*20,y+3);
+        if(value.has("off")&&value.get("off").isJsonObject()) {
+            sprite(g,"hotbar_offhand_left",x-29,y-1,29,24);drawItem(g,value.get("off"),x-26,y+3);
         }
-        g.fill(x-24,y,x-3,y+21,0xb0182029);drawItem(g,value.get("off"),x-22,y+3);
+        int row=g.guiHeight()-39;
+        // Native atlas sprites respect resource packs; missing readings are omitted.
+        int health=integer(value,"health",-1),food=integer(value,"food",-1),armor=integer(value,"armor",-1);
+        for(int i=0;i<10;i++) {
+            if(health>=0){sprite(g,"heart/container",x+i*8,row,9,9);int points=health-i*2;if(points>0)sprite(g,points>=2?"heart/full":"heart/half",x+i*8,row,9,9);}
+            if(food>=0){int fx=x+182-i*8-9;sprite(g,"food_empty",fx,row,9,9);int points=food-i*2;if(points>0)sprite(g,points>=2?"food_full":"food_half",fx,row,9,9);}
+            if(armor>0){sprite(g,"armor_empty",x+i*8,row-10,9,9);int points=armor-i*2;if(points>0)sprite(g,points>=2?"armor_full":"armor_half",x+i*8,row-10,9,9);}
+        }
+        if(value.has("experience")&&value.get("experience").isJsonObject()) {
+            var xp=value.getAsJsonObject("experience");double progress=decimal(xp,"progress",-1);int level=integer(xp,"level",-1);
+            if(progress>=0){sprite(g,"experience_bar_background",x,g.guiHeight()-29,182,5);int fill=Math.min(182,(int)(Math.max(0,progress)*183));if(fill>0)g.blitSprite(ResourceLocation.tryParse("minecraft:hud/experience_bar_progress"),182,5,0,0,x,g.guiHeight()-29,fill,5);}
+            if(level>0){String label=Integer.toString(level);int tx=(g.guiWidth()-mc.font.width(label))/2,ty=g.guiHeight()-35;g.drawString(mc.font,label,tx+1,ty,0xff000000,false);g.drawString(mc.font,label,tx-1,ty,0xff000000,false);g.drawString(mc.font,label,tx,ty+1,0xff000000,false);g.drawString(mc.font,label,tx,ty-1,0xff000000,false);g.drawString(mc.font,label,tx,ty,0xff80ff20,false);}
+        }
+        sprite(g,"crosshair",(g.guiWidth()-15)/2,(g.guiHeight()-15)/2,15,15);
+        com.mojang.blaze3d.systems.RenderSystem.disableBlend();
     }
     private static void drawItem(GuiGraphics g, JsonElement value, int x, int y) {
         if (value == null || !value.isJsonObject()) return;

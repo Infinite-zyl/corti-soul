@@ -4,6 +4,14 @@ type Item={name?:string;count?:number}|null|undefined;
 const clean=(v:unknown,n=100)=>String(v??'').replace(/[\r\n\x00-\x1f§]/g,' ').slice(0,n);
 const number=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)?v:null;
 function item(value:Item){return value?.name?{id:'minecraft:'+clean(value.name,80).replace(/^minecraft:/,''),count:number(value.count)??1}:null;}
+// Vanilla armor points, independent of durability and enchantment mitigation.
+function armorPoints(slots:any){
+ if(!slots)return null;
+ const points:Record<string,number[]>={leather:[1,3,2,1],golden:[2,5,3,1],chainmail:[2,5,4,1],iron:[2,6,5,2],diamond:[3,8,6,3],netherite:[3,8,6,3]};
+ const pieces=['helmet','chestplate','leggings','boots'];let sum=0;
+ for(let i=0;i<4;i++){const name=slots[5+i]?.name;if(!name)continue;if(i===0&&name==='turtle_helmet'){sum+=2;continue;}const material=name.slice(0,-pieces[i].length-1);if(name!==material+'_'+pieces[i]||!points[material])return null;sum+=points[material][i];}
+ return sum;
+}
 export function observerSnapshot(input:{bot:any;online:boolean;target:string;observer:string;queue:any;last:any;now?:number}){
  const {bot,queue:q={},last,online}=input,now=input.now??Date.now();
  const running=online?q?.running:null,hold=online?q?.hold:null;
@@ -16,6 +24,8 @@ export function observerSnapshot(input:{bot:any;online:boolean;target:string;obs
  return{version:1,at:now,online,target:clean(input.target,32),observer:clean(input.observer,32),
   uuid:online?clean(bot?.entity?.uuid,64):'',phase,hold:clean(hold),
   health:online?number(bot?.health):null,food:online?number(bot?.food):null,
+  experience:online?{level:number(bot?.experience?.level),progress:number(bot?.experience?.progress)}:null,
+  armor:online?armorPoints(bot?.inventory?.slots):null,
   position:p?[Math.floor(p.x),Math.floor(p.y),Math.floor(p.z)]:null,
   dimension:online?clean(bot?.game?.dimension,60):'',
   task:running?{id:running.id,label:clean(running.label),step:clean(running.step),index:running.stepIndex+1,total:running.stepCount,elapsedMs:number(running.elapsedMs)}:null,

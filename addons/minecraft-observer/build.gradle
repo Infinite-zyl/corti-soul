@@ -1,5 +1,5 @@
 plugins { id 'fabric-loom' version '1.7.4' }
-version = '1.0.0'
+version = '1.0.1'
 group = 'local.cortisoul'
 base { archivesName = 'corti-observer' }
 repositories { mavenCentral() }

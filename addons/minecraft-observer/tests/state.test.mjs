@@ -27,3 +27,10 @@ test('receipts are bounded; atomic file can be replaced; write failures are warn
   const broken=new ObserverStateWriter(path.join(dir,'missing','state.json'),t=>warnings.push(t));broken.write(state());broken.write(state());assert.equal(warnings.length,1);
  }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+test('experience and equipped armor are real readings, missing or unknown values stay unknown',()=>{
+ const b={...bot,experience:{level:27,progress:.42},inventory:{slots:{5:{name:'iron_helmet'},6:{name:'iron_chestplate'},7:{name:'iron_leggings'},8:{name:'iron_boots'}}}};
+ assert.deepEqual(state({bot:b}).experience,{level:27,progress:.42});assert.equal(state({bot:b}).armor,15);
+ assert.equal(state({bot:{...b,inventory:{slots:{6:{name:'elytra'}}}}}).armor,null);
+ assert.equal(state().experience.level,null);assert.equal(state({online:false}).armor,null);assert.equal(state({online:false}).experience,null);
+});
