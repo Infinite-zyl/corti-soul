@@ -150,4 +150,4 @@ python -m venv .venv
 
 ## 许可
 
-私有项目，未附许可。
+本仓库原创代码采用 [MIT License](LICENSE)。第三方代码保留原许可；`addons/minecraft-observer/` 继续采用其目录内的 GPL-3.0。详见 [第三方许可声明](THIRD_PARTY_NOTICES.md)。

@@ -21,7 +21,7 @@
 | 工具脚本 | `patches/apply-context-budget.mjs` | 已写盘，未 commit |
 | 说明文档 | `docs/context-budget-20261017.md` | 已写盘，未 commit |
 | 备份 | `backups/qq-latency-bc-20261018-003053/` | 已建 |
-| 取证脚本 | `D:\张屹霖\AI_AGENT_SOTWARE\scratch\qq-latency\` | 已建（仓库外） |
+| 取证脚本 | `D:\Projects\scratch\qq-latency\` | 已建（仓库外） |
 
 没有改动任何源码。两项都是 persona / memory 扩展自己声明的配置项（都标了 `x-hot`），
 改 `deployments/mybot/config.json` 即可，源码保持上游原样。
@@ -314,7 +314,7 @@ C2 的准确候选（**两个 run 合计 241 分钟、1074 次工具调用里，
 数据源：`runtimes/cortico-0.2.1/deployments/mybot/data/` 下的
 `usage.jsonl` 与 `runs/<run>/{events,log,toolcalls,transcript}.jsonl`。
 
-脚本在仓库外 `D:\张屹霖\AI_AGENT_SOTWARE\scratch\qq-latency\`：
+脚本在仓库外 `D:\Projects\scratch\qq-latency\`：
 
 | 脚本 | 作用 |
 |---|---|

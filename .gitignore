@@ -38,3 +38,14 @@ legacy/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+
+# Private runtime data / local audit outputs
+.env.*
+!.env.example
+!**/.env.example
+options.json
+console-session.key
+*.pem
+*.key
+diagnostics/

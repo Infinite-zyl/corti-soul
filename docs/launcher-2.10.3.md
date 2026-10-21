@@ -11,4 +11,4 @@
 
 使用已更新的桌面入口。重复打开应只显示原窗口；收进托盘后再次打开应显示同一窗口。正常退出唯一窗口仍会按既有约定停止托管服务。旧版、配置和存档保留，未自动关闭用户已经打开的窗口。
 
-本轮按用户指定的 `C:\Users\Infinite\.dsh\skills\make-desktop-exe\SKILL.md` 实施，并记录为后续 EXE UI 修改的偏好。Impeccable 上下文引擎缺失，按其回退规则直接读取既有实现与设计指引。
+本轮按用户指定的 `C:\Users\<USER>\.dsh\skills\make-desktop-exe\SKILL.md` 实施，并记录为后续 EXE UI 修改的偏好。Impeccable 上下文引擎缺失，按其回退规则直接读取既有实现与设计指引。
